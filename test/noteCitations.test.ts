@@ -1,6 +1,8 @@
 import { assert } from "chai";
+import { expandNewCitationTokens } from "../src/services/notes/noteCitations";
 import {
   buildCitationChipHtml,
+  hasNewCitationTokens,
   formatCitationItemPreview,
   mergeNoteCitationItems,
   parseNewCitationToken,
@@ -21,6 +23,19 @@ describe("new citation requests", function () {
         { itemRef: "12", locator: "4-9" },
         { itemRef: "7", locator: "iv" },
       ],
+    );
+  });
+
+  it("leaves other templates such as {{cite web|…}} as text", function () {
+    const text = "Wikipedia uses {{cite web |url=https://a.test |title=A}}.";
+    assert.isFalse(hasNewCitationTokens(text));
+    assert.equal(expandNewCitationTokens(text, () => null).text, text);
+  });
+
+  it("refuses a misspelled request rather than saving it as text", function () {
+    assert.throws(
+      () => expandNewCitationTokens("See {{cite:item=12 p. 4}}.", () => null),
+      /\{\{cite:item=12 p\. 4\}\} is not a citation request/,
     );
   });
 

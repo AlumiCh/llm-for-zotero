@@ -577,6 +577,47 @@ describe("durable document note association", function () {
     assert.isFalse(retried.created);
     assert.equal(notes.get(saved.itemId).getNote(), document.visibleHtml);
   });
+  it("saves a document's citation requests as Zotero citation chips, and proves them on retry", async function () {
+    globals.Zotero.URI = {
+      getItemURI: (item: { key: string }) =>
+        `http://zotero.org/users/local/abc/items/${item.key}`,
+    };
+    globals.Zotero.Utilities.Item = {
+      itemToCSLJSON: () => ({
+        title: "Paper",
+        author: [{ family: "Smith" }],
+        issued: { "date-parts": [[2020]] },
+      }),
+    };
+    document.visibleHtml =
+      "<h1>Summary</h1><p>Turnover drives drift {{cite item=42 page=7}}.</p>";
+    const saved = await savePlanDocumentAsNote(document.documentId);
+    const html = notes.get(saved.itemId).getNote();
+    assert.match(
+      html,
+      /^<div data-citation-items="[^"]+" data-schema-version="9">/,
+    );
+    assert.include(
+      html,
+      '>(<span class="citation-item">Smith, 2020, p. 7</span>)</span>.',
+    );
+    assert.notInclude(html, "{{cite");
+    const retried = await savePlanDocumentAsNote(document.documentId);
+    assert.isFalse(retried.created);
+    assert.equal(retried.itemId, saved.itemId);
+    assert.isTrue(retried.noteVerification?.matches);
+  });
+
+  it("refuses a document citation of an item that cannot be cited, reserving nothing", async function () {
+    document.visibleHtml = "<p>Text {{cite item=999 page=7}}.</p>";
+    await rejects(
+      savePlanDocumentAsNote(document.documentId),
+      /999 is not a Zotero paper or book/,
+    );
+    assert.equal(notes.size, 0);
+    assert.isUndefined(state?.pendingNote);
+  });
+
   it("does not record a document as saved when the final read-back disagrees", async function () {
     const target = { parentItemId: 42, libraryID: 1 };
     // Calibrate against a healthy save so the corruption lands on the last

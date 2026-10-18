@@ -1,6 +1,8 @@
 import {
   buildCitationChipHtml,
+  findMalformedCitationRequests,
   formatCitationFallback,
+  hasNewCitationTokens,
   NEW_CITATION_TOKEN_PATTERN,
   parseNewCitationToken,
   type NoteCitationItem,
@@ -34,6 +36,7 @@ function citableItem(item: Zotero.Item | null | undefined): Zotero.Item | null {
 }
 
 function zoteroCitationFormatter() {
+  if (typeof Zotero === "undefined") return formatCitationFallback;
   const utilities = (
     Zotero as unknown as {
       EditorInstanceUtilities?: {
@@ -67,7 +70,7 @@ export function expandNewCitationTokens(
   const registry = new Map<string, NoteEmbed>();
   const citationItems: NoteCitationItem[] = [];
   const problems: string[] = [];
-  if (!text || !/\{\{\s*cite\b/i.test(text))
+  if (!text || !hasNewCitationTokens(text))
     return { text, registry, citationItems };
   const format = zoteroCitationFormatter();
   const expanded = text.replace(NEW_CITATION_TOKEN_PATTERN, (token, body) => {
@@ -101,8 +104,7 @@ export function expandNewCitationTokens(
     return `{{citation:${chip.id}}}`;
   });
   // A near miss such as {{cite:item=12}} would be saved as raw text.
-  const malformed = expanded.match(/\{\{\s*cite\b[^}\n]*\}?\}?/gi) || [];
-  for (const token of malformed)
+  for (const token of findMalformedCitationRequests(expanded))
     problems.push(
       `${token} is not a citation request; write {{cite item=<itemId> page=<page label>}}.`,
     );

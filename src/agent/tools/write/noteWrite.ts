@@ -38,7 +38,6 @@ import {
 } from "../../../utils/noteEmbeds";
 import { escapeNoteHtml } from "../../../utils/textSanitization";
 import {
-  hasNewCitationTokens,
   mergeNoteCitationItems,
   type NoteCitationItem,
 } from "../../../utils/noteCitations";
@@ -567,12 +566,9 @@ function prepareNoteWriteInput(
   }
   resolveCreateOrAppendContent(input);
   const lookup = citationLookup(zoteroGateway, context.request.libraryID);
-  if (input.documentId) {
-    if (input.mode === "create" && hasNewCitationTokens(input.content))
-      throw new Error(
-        "A new note saved from a finalized document cannot add {{cite …}} citations yet. Save it, then add the citations with note_write mode 'edit'. No content was changed.",
-      );
-  } else if (input.content) {
+  // A finalized document is saved exactly as stored; its citation requests
+  // are turned into chips where its note HTML is built.
+  if (!input.documentId && input.content) {
     // Show the chips' own labels in review, and bind the cited items now so
     // an item that cannot be cited is refused before anything is written.
     input.content = expandCitations(input.content, input, lookup).replace(

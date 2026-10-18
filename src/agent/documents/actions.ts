@@ -20,6 +20,32 @@ import {
   updateDocumentActionState,
 } from "./store";
 import type { DocumentActionState, PlanDocument } from "./types";
+import { expandNewCitationTokens } from "../../services/notes/noteCitations";
+import {
+  hasNewCitationTokens,
+  mergeNoteCitationItems,
+} from "../../utils/noteCitations";
+import { restoreNoteEmbedTokensInHtml } from "../../utils/noteEmbeds";
+
+/**
+ * A document's HTML as a new note stores it: each `{{cite item=… page=…}}`
+ * becomes a Zotero citation chip, and the cited works are registered in the
+ * note root. Every place that builds or proves the note uses this one form.
+ */
+function documentNoteHtml(html: string, libraryID: number): string {
+  if (!hasNewCitationTokens(html)) return html;
+  const expanded = expandNewCitationTokens(html, (itemRef) =>
+    /^\d+$/.test(itemRef)
+      ? Zotero.Items.get(Number(itemRef)) || null
+      : Zotero.Items.getByLibraryAndKey(libraryID, itemRef.toUpperCase()) ||
+        null,
+  );
+  const restored = restoreNoteEmbedTokensInHtml(
+    expanded.text,
+    expanded.registry,
+  );
+  return mergeNoteCitationItems(restored.html, expanded.citationItems);
+}
 
 /** Embed the finalized document's assets for both new and existing notes. */
 export async function finalizeDocumentNoteHtml(
@@ -177,7 +203,9 @@ async function saveDocumentNote(
       await existing.reload(["primaryData", "note"], true);
       const expectedHash =
         binding.nativeContentHash ||
-        (await noteContentHash(document.visibleHtml));
+        (await noteContentHash(
+          documentNoteHtml(document.visibleHtml, binding.libraryID),
+        ));
       if (
         (target &&
           (existing.parentID !== target.parentItemId ||
@@ -202,7 +230,10 @@ async function saveDocumentNote(
       // so only an asset-free document can be proved against its own body.
       const noteVerification = document.assets.length
         ? undefined
-        : await verifyNativeNoteHtml(existing, document.visibleHtml);
+        : await verifyNativeNoteHtml(
+            existing,
+            documentNoteHtml(document.visibleHtml, existing.libraryID),
+          );
       // Prove the note before recording it as saved: a promotion the read-back
       // contradicts would lock the document out of every later save attempt.
       if (noteVerification && !noteVerification.matches)
@@ -246,6 +277,9 @@ async function saveDocumentNote(
     singleParent?.libraryID ||
     cited[0]?.libraryID ||
     Zotero.Libraries.userLibraryID;
+  // Built before anything is reserved, so a citation that cannot be made
+  // stops the save without leaving a pending note behind.
+  const initialHtml = documentNoteHtml(document.visibleHtml, libraryID);
   const note = new Zotero.Item("note");
   note.libraryID = libraryID;
   note.key =
@@ -262,7 +296,7 @@ async function saveDocumentNote(
     parentItemId: note.parentID || undefined,
     documentVersion: document.documentVersion,
     contentHash: document.contentHash,
-    nativeContentHash: await noteContentHash(document.visibleHtml),
+    nativeContentHash: await noteContentHash(initialHtml),
     nativeContentHashVersion: 1,
     finalized: document.assets.length === 0,
   };
@@ -281,13 +315,15 @@ async function saveDocumentNote(
   await persistPending(pendingNote, prior?.pendingNote);
   const persisted = await createFinalizedZoteroNote({
     note,
-    initialHtml: document.visibleHtml,
+    initialHtml,
     finalize: document.assets.length
       ? async ({ noteId, saveOptions }) => {
-          const { html, warnings } = await finalizeDocumentNoteHtml(document, {
+          const finalized = await finalizeDocumentNoteHtml(document, {
             noteId,
             saveOptions,
           });
+          const html = documentNoteHtml(finalized.html, libraryID);
+          const { warnings } = finalized;
           const candidate = {
             ...pendingNote,
             nativeContentHash: await noteContentHash(html),

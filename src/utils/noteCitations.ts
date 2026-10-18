@@ -16,8 +16,13 @@ import { escapeNoteHtml } from "./textSanitization";
  * top-level `div[data-schema-version]`.
  */
 
-/** A citation request in model text. The body never spans lines. */
-export const NEW_CITATION_TOKEN_PATTERN = /\{\{cite\s+([^{}\n]*?)\s*\}\}/g;
+/** A citation request in model text. The body never spans lines, and it
+ * starts with item=, so other templates such as {{cite web|…}} are text. */
+export const NEW_CITATION_TOKEN_PATTERN =
+  /\{\{cite\s+(item\s*=[^{}\n]*?)\s*\}\}/g;
+
+/** Text that looks like a citation request, well formed or not. */
+const CITATION_REQUEST_LIKE = /\{\{\s*cite\s*[:=]?\s*item\b[^}\n]*\}?\}?/gi;
 
 /** Schema version Zotero writes when a note uses no newer features. */
 const NOTE_SCHEMA_VERSION = "9";
@@ -54,7 +59,13 @@ export function parseNewCitationToken(
 }
 
 export function hasNewCitationTokens(text: string): boolean {
-  return new RegExp(NEW_CITATION_TOKEN_PATTERN.source).test(text);
+  return new RegExp(CITATION_REQUEST_LIKE.source, "i").test(text);
+}
+
+/** Citation-request look-alikes left in text after the real ones were read,
+ * such as {{cite:item=12}}: they would otherwise be saved as raw text. */
+export function findMalformedCitationRequests(text: string): string[] {
+  return text.match(new RegExp(CITATION_REQUEST_LIKE.source, "gi")) || [];
 }
 
 type CslName = { family?: string; given?: string; literal?: string };
