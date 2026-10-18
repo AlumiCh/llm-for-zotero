@@ -1,5 +1,6 @@
 import { resolveAgentToolPresentationLabel } from "../toolPresentation";
 import { noteHtmlToModelText } from "../../services/notes/noteRendering";
+import { NOTE_EMBED_PLACEHOLDER_GUIDANCE } from "../../utils/noteEmbeds";
 import { createJournalId } from "../store/changeJournal";
 import { createAbortController } from "../../utils/apiHelpers";
 import { normalizeExcludedItemIds } from "../../services/context/normalizers";
@@ -162,6 +163,14 @@ const MCP_TOOL_DESCRIPTION_OVERRIDES: ReadonlyMap<string, string> = new Map([
     "literature_search",
     "Search scholarly sources; results come back to the client directly. The literature_review selection card is not available over MCP, so present discovery candidates yourself; discovery never imports silently. An explicit import request uses library_import directly; metadata review uses workflow:'review', mode:'metadata'.",
   ],
+]);
+/**
+ * Rules an MCP client needs on top of a tool's description. External agents
+ * (Claude Code, Codex, other MCP clients) never see the in-app note-editing
+ * prompt, so they learn note placeholders and new citations here.
+ */
+const MCP_TOOL_DESCRIPTION_NOTES: ReadonlyMap<string, string> = new Map([
+  ["note_write", NOTE_EMBED_PLACEHOLDER_GUIDANCE],
 ]);
 const READ_ONLY_TOOL_ANNOTATIONS = {
   readOnlyHint: true,
@@ -1408,6 +1417,7 @@ function handleToolsList(
           name,
           [
             MCP_TOOL_DESCRIPTION_OVERRIDES.get(name) ?? description,
+            MCP_TOOL_DESCRIPTION_NOTES.get(name),
             MCP_GUIDANCE_TOOL_NAMES.has(name)
               ? toolRegistry.getTool(name)?.guidance?.instruction
               : undefined,

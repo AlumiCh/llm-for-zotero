@@ -1295,6 +1295,24 @@ describe("Zotero MCP server", function () {
     });
   });
 
+  it("teaches MCP clients note placeholders and new citations in note_write", async function () {
+    const registry = new AgentToolRegistry(
+      new ActionContractService({ getItem: () => null } as never),
+    );
+    registry.register(createWriteTool("note_write"));
+    registerMcpServer({ toolRegistry: registry, zoteroGateway: {} as never });
+    const response = await invokeMcpEndpoint({
+      token: getOrCreateZoteroMcpBearerToken(),
+      body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+    });
+    const noteTool = JSON.parse(response[2]).result.tools.find(
+      (tool: { name: string }) => tool.name === "note_write",
+    );
+    assert.include(noteTool.description, "{{citation:id");
+    assert.include(noteTool.description, "removeEmbeds");
+    assert.include(noteTool.description, "{{cite item=");
+  });
+
   it("shows ordinary collaboration tools without a predicted outcome", async function () {
     const registry = new AgentToolRegistry(
       new ActionContractService({ getItem: () => null } as never),
