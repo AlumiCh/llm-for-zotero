@@ -166,7 +166,7 @@ export function noteEmbedRegistry(html: string): Map<string, NoteEmbed> {
 }
 
 export const NOTE_EMBED_PLACEHOLDER_GUIDANCE =
-  "Embedded note items: {{citation:id …}}, {{highlight:id …}}, {{image:id …}} and {{embed:id …}} stand for a clickable Zotero citation, a highlight linked to the PDF, a picture, or other media in this note. The text after the id is a read-only label. When you edit the note, keep every placeholder in the text you write, where its item belongs; moving it moves the item, and {{kind:id}} without the label is enough. Never change a label, never write the label as plain text instead of the placeholder, and never invent a placeholder. Delete an item only when the user asks, by listing its id in note_write removeEmbeds.";
+  "Embedded note items: {{citation:id …}}, {{highlight:id …}}, {{image:id …}} and {{embed:id …}} stand for a clickable Zotero citation, a highlight linked to the PDF, a picture, or other media in this note. The text after the id is a read-only label. When you edit the note, keep every placeholder in the text you write, where its item belongs; moving it moves the item, and {{kind:id}} without the label is enough. Never change a label, never write the label as plain text instead of the placeholder, and never invent a placeholder. Delete an item only when the user asks, by listing its id in note_write removeEmbeds. To add a new citation, write {{cite item=<regular item's itemId> page=<pageLabel from paper_read>}}.";
 
 /**
  * Placeholders of the note text whose items a selected passage shows. A
