@@ -260,6 +260,20 @@ plugins, and many Markdown readers.
 > Note templates and figure-embedding rules live in the `write-note` skill.
 > Open the **Standalone Window** -> **Skills** portal to edit them.
 
+### Editing Zotero Notes With the Agent
+
+- **Citations, PDF highlights, and images stay intact.** The agent sees each
+  one as a placeholder such as `{{citation:3fa9c1 ("Smith", 2020, p. 42)}}`
+  and every edit puts the original item back, so a rewrite can move a
+  citation but never break it. An edit that would drop one is refused unless
+  you asked for it to be deleted.
+- **Clickable citations.** Ask for page citations and the agent writes
+  `{{cite item=123 page=42}}`, which becomes the same citation Zotero's
+  **Insert Citation** makes: clicking it opens the PDF at that page.
+- **Study-note blanks.** A line of underscores inside a quote (`> ___`) becomes
+  a divider, and a checklist item made only of underscores (`- [ ] ____`)
+  keeps its checkbox as a fill-in blank.
+
 ## Agent Mode (beta)
 
 Agent Mode is disabled by default. Enable it in `Preferences`, then toggle

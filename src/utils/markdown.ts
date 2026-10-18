@@ -2292,6 +2292,13 @@ function createMarkedRenderer(
                 .join("<br/>");
         return token.loose ? `<p>${inlineHtml}</p>` : inlineHtml;
       }
+      // A bare rule as an item's text is a fill-in blank ("- [ ] ____"),
+      // not a divider: a rule inside an item is lost with the item's
+      // checkbox when Zotero opens the note.
+      if (child.type === "hr") {
+        const blank = escapeHtml(String(child.raw || "").trim());
+        return token.loose ? `<p>${blank}</p>` : blank;
+      }
       return this.parser.parse([child], Boolean(token.loose));
     };
     let body = token.tokens.map(renderChildToken).join("");
