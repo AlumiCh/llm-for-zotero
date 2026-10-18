@@ -11,6 +11,7 @@ import {
   formatNoteEmbedToken,
 } from "../src/utils/noteEmbeds";
 import { replaceTextContentInHtml } from "../src/utils/noteEdit";
+import { stripNoteHtml } from "../src/utils/noteText";
 import { resolvedAgentRequest } from "./helpers/resolvedAgentRequest";
 
 /** A citation chip as Zotero's note editor stores it: page 42 of ITEM1. */
@@ -158,13 +159,21 @@ describe("embedded note items as placeholders", function () {
     );
   });
 
-  it("refuses a rewrite that drops the plain-text label in place of the placeholder", function () {
+  it("keeps the real citation when a rewrite retypes its label as plain text", function () {
+    const t = tokens();
+    const { input } = edit({
+      content: `Turnover (Devalle and Roxin, 2022, p. 42). ${t.highlight} ${t.image}`,
+    });
+    const html = input._patchedHtml!;
+    assert.include(html, `Turnover ${CITATION}.`);
+    assert.equal(stripNoteHtml(html).split("Devalle and Roxin").length - 1, 1);
+    assert.include(input.content, `Turnover {{citation:${t.ids.citation}}}.`);
+  });
+
+  it("still refuses a rewrite that drops an item without retyping it", function () {
     const t = tokens();
     assert.throws(
-      () =>
-        edit({
-          content: `Turnover (Devalle and Roxin, 2022, p. 42). ${t.highlight} ${t.image}`,
-        }),
+      () => edit({ content: `Turnover. ${t.highlight} ${t.image}` }),
       /would delete 1 embedded item/,
     );
   });
@@ -341,6 +350,19 @@ describe("text edits never hollow out an embedded item", function () {
     assert.isBelow(html.indexOf(CITATION), html.indexOf(", turnover drives"));
   });
 
+  it("uses the real citation, once, when a patch retypes its label", function () {
+    const html = saved({
+      patches: [
+        {
+          find: "Drift is driven by turnover (Devalle and Roxin, 2022, p. 42).",
+          replace: "Turnover drives drift (Devalle and Roxin, 2022, p. 42).",
+        },
+      ],
+    });
+    assert.include(html, `Turnover drives drift ${CITATION}.`);
+    assert.equal(stripNoteHtml(html).split("Devalle and Roxin").length - 1, 1);
+  });
+
   it("refuses a patch that edits text inside a citation", function () {
     assert.throws(
       () => replaceTextContentInHtml(NOTE, "2022, p. 42", "2022, p. 43"),
@@ -431,6 +453,15 @@ describe("selection rewrites with embedded items", function () {
     const { html } = selectionEdit("Turnover drives drift.", SENTENCE);
     assert.include(html, CITATION);
     assert.include(html, "Turnover drives drift.");
+  });
+
+  it("uses the real citation, once, when the replacement retypes its label", function () {
+    const { html } = selectionEdit(
+      "Turnover drives drift (Devalle and Roxin, 2022, p. 42).",
+      SENTENCE,
+    );
+    assert.include(html, `Turnover drives drift ${CITATION}.`);
+    assert.equal(stripNoteHtml(html).split("Devalle and Roxin").length - 1, 1);
   });
 
   it("tells the model which placeholders a selected passage contains", async function () {

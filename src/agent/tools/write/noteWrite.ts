@@ -21,12 +21,15 @@ import {
 import { synthesizeSelectedTextContexts } from "../../../services/context/normalizers";
 import { noteHtmlMatches } from "../../../utils/noteHtml";
 import {
+  adoptRetypedNoteEmbedLabels,
+  collectNoteEmbeds,
   createNoteEmbedCarrier,
   findMissingNoteEmbeds,
   formatNoteEmbedToken,
   hasNoteEmbedTokens,
   NOTE_EMBED_TOKEN_PATTERN,
   noteEmbedRegistry,
+  noteEmbedVisibleText,
   preserveNoteRoot,
   removeNoteEmbeds,
   replaceNoteEmbedTokensWithLabels,
@@ -190,6 +193,15 @@ function expandCitations(
     )
       state.items.push(item);
   return expanded.text;
+}
+
+/** Items of a note whose label shows inside a passage of its visible text. */
+function embedsShownIn(html: string, passage: string): NoteEmbed[] {
+  const text = passage.replace(/\s+/g, " ");
+  return collectNoteEmbeds(html).filter((embed) => {
+    const visible = noteEmbedVisibleText(embed);
+    return visible.length >= 3 && text.includes(visible);
+  });
 }
 
 /** The original note's items, plus the chips this write adds. */
@@ -374,7 +386,8 @@ function applyPatchesToNoteHtml(
   for (const [index, patch] of patches.entries()) {
     // A placeholder in find stands for the text its item displays; one in
     // replace puts the item itself back.
-    const replace = expandCitations(patch.replace, input, lookup);
+    // New citations join the registry before anything is looked up in it.
+    const requested = expandCitations(patch.replace, input, lookup);
     const registry = embedRegistryFor(result, input);
     const find = patch.find.replace(
       NOTE_EMBED_TOKEN_PATTERN,
@@ -382,6 +395,11 @@ function applyPatchesToNoteHtml(
         const embed = registry.get(id);
         return embed ? stripNoteHtml(embed.html) : token;
       },
+    );
+    // A label of a replaced item retyped as plain text means the item itself.
+    const replace = adoptRetypedNoteEmbedLabels(
+      requested,
+      embedsShownIn(result, find),
     );
     let options: Parameters<typeof replaceTextContentInHtml>[3] = {};
     if (hasNoteEmbedTokens(replace)) {
@@ -618,7 +636,10 @@ function prepareNoteWriteInput(
         input._selection.index - 1
       ];
       const replacementHtml = renderContentWithEmbeds(
-        input._selection.replacement,
+        adoptRetypedNoteEmbedLabels(
+          input._selection.replacement,
+          embedsShownIn(snapshot.html, selected.text),
+        ),
         false,
         snapshot.html,
         input,
@@ -664,6 +685,15 @@ function prepareNoteWriteInput(
     input.content = input._isHtml
       ? input.content
       : normalizeNoteSourceText(input.content);
+    // A retyped label of an item stands for the item. A finalized document
+    // is saved exactly as stored, so it is left to the check below.
+    if (input._patchedHtml === undefined && !input.documentId)
+      input.content = adoptRetypedNoteEmbedLabels(
+        input.content,
+        collectNoteEmbeds(snapshot.html).filter(
+          (embed) => !input.removeEmbeds?.includes(embed.id),
+        ),
+      );
     // Bind the exact final HTML now, so the check below and the write agree.
     const finalHtml = withCitationRegistry(
       finishEditHtml(

@@ -206,6 +206,55 @@ export function findNoteEmbedTokenIds(text: string): string[] {
   );
 }
 
+/** What an item shows as text, e.g. "(Smith, 2020, p. 42)". */
+export function noteEmbedVisibleText(embed: Pick<NoteEmbed, "html">): string {
+  return stripNoteHtml(embed.html).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Swap a plain-text copy of an item's label for the item's placeholder.
+ *
+ * The model sometimes retypes a citation's label, "(Smith, 2020, p. 42)",
+ * instead of keeping its placeholder. Left alone, that label is saved as
+ * plain words beside the real chip, or the chip is lost. Each given item
+ * not already named by a placeholder claims the first plain copy of its
+ * label, outside any placeholder. Images and media have no label to match.
+ */
+export function adoptRetypedNoteEmbedLabels(
+  text: string,
+  embeds: readonly NoteEmbed[],
+): string {
+  const claimed = new Map<string, number>();
+  for (const id of findNoteEmbedTokenIds(text))
+    claimed.set(id, (claimed.get(id) || 0) + 1);
+  let out = text;
+  for (const embed of embeds) {
+    const count = claimed.get(embed.id) || 0;
+    if (count) {
+      claimed.set(embed.id, count - 1);
+      continue;
+    }
+    if (embed.kind !== "citation" && embed.kind !== "highlight") continue;
+    const visible = noteEmbedVisibleText(embed);
+    if (visible.length < 3) continue;
+    const token = formatNoteEmbedToken(embed, { label: false });
+    // Only text between placeholders is searched, never a label inside one.
+    const tokens = Array.from(
+      out.matchAll(new RegExp(NOTE_EMBED_TOKEN_PATTERN.source, "g")),
+      (match) => [match.index, match.index + match[0].length],
+    );
+    let at = out.indexOf(visible);
+    while (
+      at >= 0 &&
+      tokens.some(([start, end]) => at < end && at + visible.length > start)
+    )
+      at = out.indexOf(visible, at + 1);
+    if (at >= 0)
+      out = out.slice(0, at) + token + out.slice(at + visible.length);
+  }
+  return out;
+}
+
 /** Replace each item in note HTML by its placeholder, escaped as HTML text. */
 export function replaceNoteEmbedsWithTokens(html: string): string {
   const embeds = collectNoteEmbeds(html);

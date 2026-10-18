@@ -723,7 +723,7 @@ describe("noteWrite create tracking", function () {
       const validated = tool.validate({
         mode: "edit",
         targetNoteId: 63,
-        content: "Turnover drives drift (Smith, 2020, p. 42).",
+        content: "Turnover drives drift.",
       });
       assert.isTrue(validated.ok);
       if (!validated.ok) return;
