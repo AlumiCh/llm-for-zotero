@@ -106,6 +106,47 @@ export function buildEvidenceCacheKey(params: {
   ]);
 }
 
+/**
+ * The call's passages from every paper's ranked candidates. Each paper keeps
+ * its best chunk first, so a paper with candidates is never cut by the call
+ * budget, which is therefore never smaller than the number of such papers;
+ * the remaining slots go to the best of the rest by score.
+ *
+ * Evidence mode gives every paper's rank-1 chunk the same score, so the fused
+ * score decides which paper's best chunk leads; the chunk index is only the
+ * last resort.
+ */
+function allocateEvidenceBudget(
+  results: RetrievalResult[],
+  topK: number,
+): RetrievalResult[] {
+  const ranked = results
+    .slice()
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        b.hybridScore - a.hybridScore ||
+        a.chunkIndex - b.chunkIndex,
+    );
+  const paperKey = (result: RetrievalResult) =>
+    `${result.paperContext.libraryID || 0}:${result.paperContext.itemId}:${result.paperContext.contextItemId}`;
+  const seenPapers = new Set<string>();
+  const best = new Set<RetrievalResult>();
+  for (const result of ranked) {
+    const key = paperKey(result);
+    if (seenPapers.has(key)) continue;
+    seenPapers.add(key);
+    best.add(result);
+  }
+  const cap = Math.max(topK, best.size);
+  const kept = new Set(best);
+  for (const result of ranked) {
+    if (kept.size >= cap) break;
+    kept.add(result);
+  }
+  return ranked.filter((result) => kept.has(result));
+}
+
 export class RetrievalService {
   private readonly evidenceCache = new Map<
     EvidenceCacheKey,
@@ -274,16 +315,7 @@ export class RetrievalService {
         })),
       candidateBuilder: this.candidateBuilder,
     });
-    // Evidence mode gives every paper's rank-1 chunk the same score, so the
-    // fused score decides which paper's best chunk leads; the chunk index is
-    // only the last resort.
-    results.sort(
-      (a, b) =>
-        b.score - a.score ||
-        b.hybridScore - a.hybridScore ||
-        a.chunkIndex - b.chunkIndex,
-    );
-    return results.slice(0, topK);
+    return allocateEvidenceBudget(results, topK);
   }
 
   clearEvidenceCache(): void {

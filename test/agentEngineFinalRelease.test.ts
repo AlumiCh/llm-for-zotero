@@ -2733,7 +2733,9 @@ describe("agent turn endings from the real runtime", function () {
       realRuntime({
         runStep: async (params) => {
           await params.onTextDelta?.("Partial answer that streamed. ");
-          throw new Error("Error in input stream");
+          // Not a network or stream failure: those the runtime retries and
+          // then ends as connection_lost (turnBoundary.ts, Rule 4).
+          throw new Error("upstream provider failure");
         },
       }),
       seen,
@@ -2742,7 +2744,7 @@ describe("agent turn endings from the real runtime", function () {
 
     assert.equal(onlyRun(conversationKey).status, "failed");
     assert.deepEqual(seen.statuses.at(-1), {
-      text: "Error: Error in input stream",
+      text: "Error: upstream provider failure",
       kind: "error",
     });
     const stored = storedAssistant(seen);
@@ -2757,7 +2759,8 @@ describe("agent turn endings from the real runtime", function () {
     const deps = panelDeps(
       realRuntime({
         runStep: async () => {
-          throw new Error("NetworkError when attempting to fetch resource.");
+          // Not a network failure, which the runtime would retry.
+          throw new Error("upstream provider failure");
         },
       }),
       seen,
@@ -2771,7 +2774,7 @@ describe("agent turn endings from the real runtime", function () {
     assert.isFalse(Boolean(assistantMessage.streaming));
     assert.lengthOf(seen.assistantWrites, 0, "the stored answer is kept");
     assert.deepEqual(seen.statuses.at(-1), {
-      text: "Error: NetworkError when attempting to fetch re",
+      text: "Error: upstream provider failure",
       kind: "error",
     });
   });

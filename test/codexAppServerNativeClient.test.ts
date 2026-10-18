@@ -64,6 +64,12 @@ import {
   setUserSkills,
 } from "../src/agent/skills";
 
+import {
+  bumpConversationWriteGeneration,
+  freezeConversationWrites,
+  resetConversationWriteFenceForTests,
+} from "../src/shared/conversationWriteFence";
+
 const here = dirname(fileURLToPath(import.meta.url));
 
 function createDirectPdfSelection(params: {
@@ -1410,6 +1416,157 @@ describe("Codex app-server native client", function () {
           request.params.threadId === "thread-settings-old",
       ),
     );
+  });
+
+  describe("stale conversation write during thread resume", function () {
+    const staleScope = (conversationKey: number) => ({
+      conversationKey,
+      libraryID: 1,
+      kind: "global" as const,
+      title: "Stale write during resume",
+    });
+    const archivedThreadIds = (
+      requests: Array<{ method: string; params: Record<string, any> }>,
+    ) =>
+      requests
+        .filter((request) => request.method === "thread/archive")
+        .map((request) => request.params.threadId);
+
+    async function runStaleResume(options: {
+      conversationKey: number;
+      processKey: string;
+      onResume?: (threadId: string) => string | void;
+      resumeError?: string;
+    }) {
+      const requests: Array<{
+        method: string;
+        params: Record<string, any>;
+      }> = [];
+      const proc = createNativeLifecycleTestProcess({
+        newThreadIds: ["thread-must-not-start"],
+        requests,
+        permissionProfilesResult: {
+          data: [{ id: ":workspace", description: "Workspace", allowed: true }],
+        },
+        resumeEffectiveSettings: {
+          permissions: ":workspace",
+          approvalPolicy: "on-request",
+          approvalsReviewer: "user",
+        },
+        onResume: options.onResume,
+        resumeError: options.resumeError,
+      });
+      const originalSpawn = CodexAppServerProcess.spawn;
+      const restorePrefs = installDirectPathTestPrefs("off", ":workspace");
+      CodexAppServerProcess.spawn = async () => proc;
+      let rejection: unknown;
+      let persistedThreadId = "";
+      try {
+        await runCodexAppServerNativeTurn({
+          scope: staleScope(options.conversationKey),
+          model: "gpt-5.6",
+          messages: [{ role: "user", content: "Continue." }],
+          processKey: options.processKey,
+          hooks: {
+            loadProviderSessionId: async () => "thread-stored",
+            loadProviderPermissionState: async () =>
+              JSON.stringify({
+                boundary: { kind: "profile", profileId: ":workspace" },
+                approvalOverride: { policy: "on-request", reviewer: "user" },
+              }),
+            persistProviderSession: async (value) => {
+              persistedThreadId = value.threadId;
+            },
+          },
+        });
+      } catch (error) {
+        rejection = error;
+      } finally {
+        CodexAppServerProcess.spawn = originalSpawn;
+        destroyCachedCodexAppServerProcess(options.processKey, proc);
+        restorePrefs();
+        resetConversationWriteFenceForTests();
+      }
+      return { requests, rejection, persistedThreadId };
+    }
+
+    beforeEach(function () {
+      resetConversationWriteFenceForTests();
+    });
+
+    it("rejects without archiving the stored thread or starting a new one when the generation changes during resume", async function () {
+      const key = 6_000_000_503;
+      const { requests, rejection } = await runStaleResume({
+        conversationKey: key,
+        processKey: "native-stale-write-same-thread",
+        onResume: () => {
+          bumpConversationWriteGeneration(key);
+        },
+      });
+      assert.match(
+        String((rejection as Error)?.message || rejection),
+        /Conversation write generation changed/,
+      );
+      assert.notInclude(archivedThreadIds(requests), "thread-stored");
+      assert.isEmpty(archivedThreadIds(requests));
+      assert.isFalse(
+        requests.some((request) => request.method === "thread/start"),
+      );
+    });
+
+    it("cleans up only the replacement thread when the generation changes during a resume that returns a different thread", async function () {
+      const key = 6_000_000_504;
+      const { requests, rejection, persistedThreadId } = await runStaleResume({
+        conversationKey: key,
+        processKey: "native-stale-write-replacement-thread",
+        onResume: () => {
+          bumpConversationWriteGeneration(key);
+          return "thread-replacement";
+        },
+      });
+      assert.match(
+        String((rejection as Error)?.message || rejection),
+        /Conversation write generation changed/,
+      );
+      assert.deepEqual(archivedThreadIds(requests), ["thread-replacement"]);
+      assert.isFalse(
+        requests.some((request) => request.method === "thread/start"),
+      );
+      assert.notEqual(persistedThreadId, "thread-replacement");
+    });
+
+    it("rejects without archiving the stored thread when writes are frozen during resume", async function () {
+      const key = 6_000_000_505;
+      const { requests, rejection } = await runStaleResume({
+        conversationKey: key,
+        processKey: "native-stale-write-frozen",
+        onResume: () => {
+          freezeConversationWrites(key);
+        },
+      });
+      assert.match(
+        String((rejection as Error)?.message || rejection),
+        /Conversation write generation changed/,
+      );
+      assert.isEmpty(archivedThreadIds(requests));
+      assert.isFalse(
+        requests.some((request) => request.method === "thread/start"),
+      );
+    });
+
+    it("still archives the stored thread and starts a new one when resume genuinely fails", async function () {
+      const { requests, rejection, persistedThreadId } = await runStaleResume({
+        conversationKey: 6_000_000_506,
+        processKey: "native-stale-write-genuine-resume-failure",
+        resumeError: "thread resume failed upstream",
+      });
+      assert.isUndefined(rejection);
+      assert.include(archivedThreadIds(requests), "thread-stored");
+      assert.isTrue(
+        requests.some((request) => request.method === "thread/start"),
+      );
+      assert.equal(persistedThreadId, "thread-must-not-start");
+    });
   });
 
   it("replaces a sticky Ask thread before Custom, injects history, then swaps durably", async function () {

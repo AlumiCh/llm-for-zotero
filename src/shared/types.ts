@@ -149,6 +149,11 @@ export type SelectedTextContext = {
   pageIndex?: number;
   /** User-facing PDF page label, which may be non-numeric. */
   pageLabel?: string;
+  /**
+   * The user's question about this text, attached from the inline box.
+   * Trimmed, whitespace-collapsed, at most 2000 characters; absent when empty.
+   */
+  userQuery?: string;
 };
 
 export type SelectedTextAnchorResolution = "chunks" | "page" | "locator-only";

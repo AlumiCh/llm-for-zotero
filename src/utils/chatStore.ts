@@ -94,6 +94,11 @@ import {
   normalizeTagContextRefs,
 } from "../services/context/normalizers";
 import { normalizeQuoteCitations } from "../services/quotes/quoteCitations";
+import {
+  mergeQuoteLocationWritesIntoStoredJson,
+  restoreQuoteSourceFileStates,
+  type QuoteLocationWrite,
+} from "../shared/quoteLocationStorage";
 import { pendingDeletionStore } from "../core/conversations/pendingDeletionStore";
 import { initRecentlyDeletedConversationTombstones } from "../core/conversations/recentlyDeletedConversations";
 import {
@@ -2328,7 +2333,10 @@ export async function loadConversation(
     if (typeof row.quoteCitationsJson === "string" && row.quoteCitationsJson) {
       try {
         const parsed = JSON.parse(row.quoteCitationsJson) as unknown;
-        const normalized = normalizeQuoteCitations(parsed);
+        const normalized = restoreQuoteSourceFileStates(
+          parsed,
+          normalizeQuoteCitations(parsed),
+        );
         if (normalized.length) {
           quoteCitations = normalized;
         }
@@ -3046,6 +3054,59 @@ export async function updateLatestAssistantMessage(
   await refreshUpstreamConversationSearchIndex(normalizedKey);
   notifyConversationCatalogChanged("turns", normalizedKey);
   return true;
+}
+
+/**
+ * Save quote locations that the display gate verified into one stored
+ * assistant row. Only `quote_citations_json` of the row at `target.timestamp`
+ * (and `target.messageId`, when known) changes; the records the writes do not
+ * name, every other column, and the catalog stay as they were. Returns false
+ * when nothing was written: no single matching row, no matching record, or
+ * the same values already stored.
+ */
+export async function updateAssistantMessageQuoteLocations(
+  conversationKey: number,
+  target: { timestamp: number; messageId?: number },
+  writes: readonly QuoteLocationWrite[],
+): Promise<boolean> {
+  const normalizedKey = normalizeConversationKey(conversationKey);
+  if (!normalizedKey || !isUpstreamStoreConversationKey(normalizedKey))
+    return false;
+  const timestamp = Number(target.timestamp);
+  if (!Number.isFinite(timestamp) || !writes.length) return false;
+  const messageId = Math.floor(Number(target.messageId));
+  const idFilter = Number.isFinite(messageId) && messageId > 0;
+  const selector =
+    await resolveRepairingMessageConversationSelector(normalizedKey);
+  let written = false;
+  await Zotero.DB.executeTransaction(async () => {
+    const rows = (await Zotero.DB.queryAsync(
+      `SELECT id, quote_citations_json AS quoteCitationsJson
+       FROM ${CHAT_MESSAGES_TABLE}
+       WHERE ${selector.whereSql} AND role = 'assistant' AND timestamp = ?${
+         idFilter ? " AND id = ?" : ""
+       }
+       LIMIT 2`,
+      [
+        ...selector.params,
+        Math.floor(timestamp),
+        ...(idFilter ? [messageId] : []),
+      ],
+    )) as Array<{ id: unknown; quoteCitationsJson: unknown }> | undefined;
+    // Two rows at one timestamp cannot be told apart without the row id.
+    if (rows?.length !== 1) return;
+    const nextJson = mergeQuoteLocationWritesIntoStoredJson(
+      rows[0].quoteCitationsJson,
+      writes,
+    );
+    if (nextJson === null) return;
+    await Zotero.DB.queryAsync(
+      `UPDATE ${CHAT_MESSAGES_TABLE} SET quote_citations_json = ? WHERE id = ?`,
+      [nextJson, rows[0].id],
+    );
+    written = true;
+  });
+  return written;
 }
 
 export async function clearConversation(

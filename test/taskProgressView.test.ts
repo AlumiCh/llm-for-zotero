@@ -40,7 +40,6 @@ import { executionCheckpointEvent } from "../src/agent/execution/checkpointEvent
 import { DIGEST_FAILURE_REASONS } from "../src/agent/digests/paperDigestWorker";
 import { initI18n, t } from "../src/utils/i18n";
 import {
-  TASK_PROGRESS_FLASH_MS,
   TASK_PROGRESS_OPEN_PASSAGE_EVENT,
   TASK_PROGRESS_DRAWER_MIN_PX,
   TASK_PROGRESS_WINDOW,
@@ -101,6 +100,22 @@ function seedScope(count = 200) {
   });
 }
 
+/** What the view dispatches through the window's `CustomEvent`. */
+class FakeCustomEvent {
+  constructor(
+    public type: string,
+    public init: { bubbles?: boolean; detail?: unknown },
+  ) {}
+}
+
+/** The fake document, with a window that can build custom events. */
+function customEventDocument(): Document {
+  return {
+    ...(fakeDocument as unknown as Record<string, unknown>),
+    defaultView: { CustomEvent: FakeCustomEvent },
+  } as unknown as Document;
+}
+
 type Harness = {
   view: TaskProgressView;
   row: FakeElement;
@@ -113,7 +128,6 @@ type Harness = {
   messages: FakeElement;
   timers: Map<number, { callback: () => void; ms: number }>;
   runTimers: () => void;
-  navigated: FakeElement[];
   mineruAsked: number[];
   count: () => string;
   items: () => FakeElement[];
@@ -145,7 +159,6 @@ function mount(
   const chatBox = messages;
   const panel = new FakeElement("div");
   panel.append(row, shell);
-  const navigated: FakeElement[] = [];
   const mineruAsked: number[] = [];
   const view = mountTaskProgressView({
     doc: options.doc || fakeDocument,
@@ -175,7 +188,6 @@ function mount(
             return options.mineru!(itemId);
           }
         : undefined,
-      navigateToCitation: (card) => navigated.push(card as never),
       layout: options.layout,
       resolvePaperLabel: options.resolvePaperLabel,
     },
@@ -211,7 +223,6 @@ function mount(
         timer.callback();
       }
     },
-    navigated,
     mineruAsked,
     count: () => row.findByClass("llm-task-progress-count")!.textContent,
     items: () => drawer.findAllByClass("llm-task-paper"),
@@ -894,17 +905,7 @@ describe("task progress view", function () {
 
   it("lists a document's citations of a paper by section, and opens the paper from them", function () {
     seedScope(3);
-    class FakeCustomEvent {
-      constructor(
-        public type: string,
-        public init: { bubbles?: boolean; detail?: unknown },
-      ) {}
-    }
-    const doc = {
-      ...(fakeDocument as unknown as Record<string, unknown>),
-      defaultView: { CustomEvent: FakeCustomEvent },
-    } as unknown as Document;
-    const harness = track(mount({}, { doc }));
+    const harness = track(mount({}, { doc: customEventDocument() }));
     beginTaskRun(KEY, { runId: "run-a" });
     applyTaskPaperUpdate(
       KEY,
@@ -953,7 +954,10 @@ describe("task progress view", function () {
       rawSnippet: "",
       label: "Discussion",
     });
-    assert.deepEqual(harness.navigated, [], "no quote chip jump");
+    // A link the panel is still opening does nothing more.
+    links[0].disabled = true;
+    links[0].dispatchFakeEvent("click");
+    assert.lengthOf(dispatched, 1);
   });
 
   it("closes on Escape and returns focus to the row", function () {
@@ -1011,17 +1015,7 @@ describe("task progress view", function () {
 
   it("offers Source on passages with text or a named page, and asks the panel to open it", function () {
     seedScope(3);
-    class FakeCustomEvent {
-      constructor(
-        public type: string,
-        public init: { bubbles?: boolean; detail?: unknown },
-      ) {}
-    }
-    const doc = {
-      ...(fakeDocument as unknown as Record<string, unknown>),
-      defaultView: { CustomEvent: FakeCustomEvent },
-    } as unknown as Document;
-    const harness = track(mount({}, { doc }));
+    const harness = track(mount({}, { doc: customEventDocument() }));
     applyTaskPaperUpdate(
       KEY,
       {
@@ -1140,21 +1134,21 @@ describe("task progress view", function () {
     });
   });
 
-  it("jumps from a citation to its quote chip, collapsing the drawer", function () {
+  it("opens a cited quote in its paper, keeping the drawer open", function () {
     seedScope(5);
-    const harness = track(mount());
-    const card = new FakeElement("div");
-    card.className = "llm-quote-card llm-quote-citation-anchor";
-    card.dataset.quoteCitationId = "q1";
-    const decoy = new FakeElement("div");
-    decoy.className = "llm-quote-card llm-quote-citation-anchor";
-    decoy.dataset.quoteCitationId = "q2";
-    harness.chatBox.append(decoy, card);
+    const dispatched: FakeCustomEvent[] = [];
+    const harness = track(mount({}, { doc: customEventDocument() }));
     beginTaskRun(KEY, { runId: "run-a" });
     applyTaskPaperUpdate(KEY, ledgerDelta("c1", [[1, "read", "One"]]), "run-a");
     completeTaskRun(KEY, {
       runId: "run-a",
-      quoteCitations: [quoteCitation("q1", 1)],
+      quoteCitations: [
+        {
+          ...quoteCitation("Q1.a:p2", 1),
+          pageHintLabel: "7",
+          contextItemId: 9,
+        },
+      ],
     });
     harness.row.dispatchFakeEvent("click");
     const item = harness.items()[0];
@@ -1163,44 +1157,70 @@ describe("task progress view", function () {
       item.findByClass("llm-task-paper-tail")!.textContent,
       "Results · cited 1",
     );
-    item.findByClass("llm-task-paper-summary")!.dispatchFakeEvent("click");
+    const summary = item.findByClass("llm-task-paper-summary")!;
+    summary.dispatchFakeEvent("click");
     const link = item.findByClass("llm-task-paper-citation")!;
-    assert.include(link.textContent, "Quoted evidence q1");
+    assert.equal(link.textContent, "↳ “Quoted evidence Q1.a:p2”");
+    assert.equal(link.dataset.citationId, "Q1.a:p2");
+    assert.equal(link.title, "Open this passage in the paper");
+    (link as any).dispatchEvent = (event: FakeCustomEvent) => {
+      dispatched.push(event);
+      return true;
+    };
+    const click = link.dispatchFakeEvent("click");
+    assert.isTrue(click.propagationStopped, "the click stays on the link");
+    assert.lengthOf(dispatched, 1);
+    assert.equal(dispatched[0].type, TASK_PROGRESS_OPEN_PASSAGE_EVENT);
+    assert.isTrue(dispatched[0].init.bubbles);
+    assert.deepInclude(dispatched[0].init.detail as object, {
+      itemId: 1,
+      libraryID: 1,
+      rawSnippet: "Quoted evidence Q1.a:p2",
+      cleanedSnippet: "Quoted evidence Q1.a:p2",
+      label: "(Smith, 2021)",
+      // The page and the attachment the quote recorded, for the fallback
+      // and the right PDF.
+      pageLabel: "7",
+      contextItemId: 9,
+      granularity: "passage",
+    });
+    assert.isTrue(harness.view.isOpen(), "the drawer stays open");
+    assert.equal(summary.getAttribute("aria-expanded"), "true");
+
+    // A link the panel is still opening does nothing more.
+    link.disabled = true;
     link.dispatchFakeEvent("click");
-    assert.isFalse(harness.view.isOpen());
-    assert.deepEqual(harness.navigated, [card]);
-    assert.isTrue(card.classList.contains("llm-task-progress-flash"));
-    const flash = Array.from(harness.timers.values()).find(
-      (timer) => timer.ms === TASK_PROGRESS_FLASH_MS,
-    );
-    assert.exists(flash);
-    flash!.callback();
-    assert.isFalse(card.classList.contains("llm-task-progress-flash"));
+    assert.lengthOf(dispatched, 1);
   });
 
-  it("jumps to the quote chip whose id contains '.' and ':', not to a look-alike", function () {
+  it("opens the paper from a citation recorded without its quote", function () {
     seedScope(5);
-    const harness = track(mount());
-    const card = new FakeElement("div");
-    card.className = "llm-quote-card llm-quote-citation-anchor";
-    card.dataset.quoteCitationId = "Q1.a:p2";
-    const decoy = new FakeElement("div");
-    decoy.className = "llm-quote-card llm-quote-citation-anchor";
-    decoy.dataset.quoteCitationId = "Q1ap2";
-    harness.chatBox.append(card, decoy);
+    const dispatched: FakeCustomEvent[] = [];
+    const harness = track(mount({}, { doc: customEventDocument() }));
     beginTaskRun(KEY, { runId: "run-a" });
     applyTaskPaperUpdate(KEY, ledgerDelta("c1", [[1, "read", "One"]]), "run-a");
     completeTaskRun(KEY, {
       runId: "run-a",
-      quoteCitations: [quoteCitation("Q1.a:p2", 1)],
+      quoteCitations: [{ ...quoteCitation("q1", 1), quoteText: "" }],
     });
     harness.row.dispatchFakeEvent("click");
     const item = harness.items()[0];
     item.findByClass("llm-task-paper-summary")!.dispatchFakeEvent("click");
     const link = item.findByClass("llm-task-paper-citation")!;
-    assert.equal(link.dataset.citationId, "Q1.a:p2");
+    assert.equal(link.textContent, "↳ “(Smith, 2021)”");
+    (link as any).dispatchEvent = (event: FakeCustomEvent) => {
+      dispatched.push(event);
+      return true;
+    };
     link.dispatchFakeEvent("click");
-    assert.deepEqual(harness.navigated, [card]);
+    assert.lengthOf(dispatched, 1);
+    assert.deepInclude(dispatched[0].init.detail as object, {
+      itemId: 1,
+      rawSnippet: "",
+      label: "(Smith, 2021)",
+      granularity: "full",
+    });
+    assert.isTrue(harness.view.isOpen(), "the drawer stays open");
   });
 
   it("asks for MinerU text only for the rows on screen", async function () {

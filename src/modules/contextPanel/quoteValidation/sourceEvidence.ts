@@ -25,6 +25,7 @@ import {
   type QuoteSourceText,
 } from "../../../services/quotes/quoteCitations";
 import { normalizePaperContextRefs } from "../../../services/context/normalizers";
+import { isPdfContextAttachment } from "../../../services/paperContent/contextAttachmentSupport";
 import type { QuoteCitation } from "../../../shared/types";
 import { t } from "../../../utils/i18n";
 import { sanitizeText } from "../../../utils/textSanitization";
@@ -137,6 +138,12 @@ function cachedPdfPageQuoteSourcesForPaper(
   if (!Number.isFinite(contextItemId) || contextItemId <= 0) return [];
   const contextItem = resolveQuoteSourceContextItem(paper);
   if (!canUsePdfPageTextQuoteSource(paper, contextItem)) return [];
+  return cachedPdfPageQuoteSourcesForAttachment(contextItemId);
+}
+
+function cachedPdfPageQuoteSourcesForAttachment(
+  contextItemId: number,
+): QuoteSourceText[] {
   const cached = getCachedPageTextForAttachment(contextItemId);
   const normalizedByPageIndex = new Map(
     (cached?.normalised || []).map((page) => [page.pageIndex, page]),
@@ -188,7 +195,7 @@ export type QuoteSourceEvidence = {
  * Kept under the page-text cache's own entry limit so background warming
  * cannot evict the pages it just read.
  */
-const MAX_WARMED_QUOTE_SOURCE_PAPERS = 40;
+export const MAX_WARMED_QUOTE_SOURCE_PAPERS = 40;
 
 function hasUnresolvedQuoteSourceScope(
   ...groups: Array<PaperContextRef[] | undefined | null>
@@ -253,31 +260,167 @@ export function buildCachedQuoteSourceEvidenceForPaperContexts(
   return { sourceTexts: out, complete };
 }
 
+/**
+ * Add the cached PDF page text of each attachment that the message's own
+ * citations name but its paper contexts do not cover. Old paper chats stored
+ * no paper contexts, so without this their citations could be warmed yet
+ * never checked. The pages carry their own attachment id and the citing
+ * record's label; a paragraph citation is only ever located on the pages of
+ * its own attachment. Context papers plus added attachments stay within the
+ * warming cap. Completeness is unchanged: an added attachment never turns a
+ * missing match into an absence verdict.
+ */
+export function addCitedAttachmentPageEvidence(
+  evidence: QuoteSourceEvidence,
+  quoteCitations: readonly QuoteCitation[] | undefined,
+): QuoteSourceEvidence {
+  const covered = new Set<number>();
+  for (const source of evidence.sourceTexts) {
+    const contextItemId = positiveContextItemId(source.contextItemId);
+    if (contextItemId) covered.add(contextItemId);
+  }
+  const added: QuoteSourceText[] = [];
+  const considered = new Set<number>();
+  for (const citation of quoteCitations || []) {
+    const contextItemId = positiveContextItemId(citation.contextItemId);
+    if (
+      !contextItemId ||
+      covered.has(contextItemId) ||
+      considered.has(contextItemId)
+    ) {
+      continue;
+    }
+    if (covered.size + considered.size >= MAX_WARMED_QUOTE_SOURCE_PAPERS) {
+      break;
+    }
+    considered.add(contextItemId);
+    if (!isPdfContextAttachment(resolveContextItemById(contextItemId))) {
+      continue;
+    }
+    for (const pageSource of cachedPdfPageQuoteSourcesForAttachment(
+      contextItemId,
+    )) {
+      added.push({
+        ...pageSource,
+        sourceLabel: citation.citationLabel,
+        sourceMatchSource: "pdf-page-text",
+        contextItemId,
+        itemId: citation.itemId,
+      });
+    }
+  }
+  return added.length
+    ? {
+        sourceTexts: [...evidence.sourceTexts, ...added],
+        complete: evidence.complete,
+      }
+    : evidence;
+}
+
+export type QuoteSourceWarmResult = {
+  /** Attachments this warm worked on, in the order it worked on them. */
+  attemptedContextItemIds: number[];
+  /** Attachments whose PDF page text this warm added to the cache. */
+  addedPageTextContextItemIds: number[];
+};
+
+type QuoteSourceWarmTarget = {
+  contextItemId: number;
+  /** Absent for an attachment known only from a citation. */
+  paper?: PaperContextRef;
+};
+
+function positiveContextItemId(value: unknown): number | null {
+  const id = Math.floor(Number(value || 0));
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+/**
+ * Order warm work: attachments the message's own citations name come first
+ * (in citation order), then the remaining context papers in group order.
+ */
+function orderQuoteSourceWarmTargets(
+  papers: PaperContextRef[],
+  priorityContextItemIds: readonly number[] | undefined,
+): QuoteSourceWarmTarget[] {
+  const targets: QuoteSourceWarmTarget[] = [];
+  const placed = new Set<PaperContextRef>();
+  const seenPriorityIds = new Set<number>();
+  for (const rawId of priorityContextItemIds || []) {
+    const contextItemId = positiveContextItemId(rawId);
+    if (!contextItemId || seenPriorityIds.has(contextItemId)) continue;
+    seenPriorityIds.add(contextItemId);
+    const matches = papers.filter(
+      (paper) => positiveContextItemId(paper.contextItemId) === contextItemId,
+    );
+    if (!matches.length) {
+      targets.push({ contextItemId });
+      continue;
+    }
+    for (const paper of matches) {
+      placed.add(paper);
+      targets.push({ contextItemId, paper });
+    }
+  }
+  for (const paper of papers) {
+    if (placed.has(paper)) continue;
+    const contextItemId = positiveContextItemId(paper.contextItemId);
+    if (contextItemId) targets.push({ contextItemId, paper });
+  }
+  return targets;
+}
+
+function resolveContextItemById(contextItemId: number): Zotero.Item | null {
+  try {
+    return Zotero.Items.get(contextItemId) || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function warmQuoteSourceCachesForPaperContexts(
   groups: Array<PaperContextRef[] | undefined | null>,
   options?: {
     yieldToMain?: () => Promise<void>;
     shouldContinue?: () => boolean;
+    /** Attachments named by the message's own citations; warmed first. */
+    priorityContextItemIds?: readonly number[];
+    /** Lower bound than the default cap, for early warms. */
+    maxPapers?: number;
   },
-): Promise<void> {
+): Promise<QuoteSourceWarmResult> {
+  const result: QuoteSourceWarmResult = {
+    attemptedContextItemIds: [],
+    addedPageTextContextItemIds: [],
+  };
   // A library-chat answer can cite dozens of papers. Reading more of them than
   // the page-text cache can hold would evict the earlier ones before they are
   // used, so warming stops short of thrashing its own cache; quotes in the
   // remainder simply stay deferred and resolve when clicked.
-  const uniquePapers = collectQuoteSourcePapers(...groups).slice(
-    0,
+  const maxPapers = Math.min(
     MAX_WARMED_QUOTE_SOURCE_PAPERS,
+    Math.max(0, Math.floor(Number(options?.maxPapers ?? Infinity))),
   );
-  for (const paper of uniquePapers) {
-    if (options?.shouldContinue?.() === false) return;
+  const targets = orderQuoteSourceWarmTargets(
+    collectQuoteSourcePapers(...groups),
+    options?.priorityContextItemIds,
+  ).slice(0, maxPapers);
+  for (const { contextItemId, paper } of targets) {
+    if (options?.shouldContinue?.() === false) return result;
     if (options?.yieldToMain) await options.yieldToMain();
-    const contextItemId = Math.floor(Number(paper.contextItemId || 0));
-    const contextItem = resolveQuoteSourceContextItem(paper);
-    const usesPdfPageText =
-      Number.isFinite(contextItemId) &&
-      contextItemId > 0 &&
-      canUsePdfPageTextQuoteSource(paper, contextItem);
+    result.attemptedContextItemIds.push(contextItemId);
+    const contextItem = paper
+      ? resolveQuoteSourceContextItem(paper)
+      : resolveContextItemById(contextItemId);
+    // An attachment known only from a citation has no recorded source mode;
+    // only a PDF can supply page text for it.
+    const usesPdfPageText = paper
+      ? canUsePdfPageTextQuoteSource(paper, contextItem)
+      : isPdfContextAttachment(contextItem);
     if (usesPdfPageText) {
+      const hadPageText = Boolean(
+        getCachedPageTextForAttachment(contextItemId),
+      );
       try {
         const activeReader = getActiveReaderForSelectedTab();
         const activeReaderItemId = Math.floor(
@@ -304,12 +447,20 @@ export async function warmQuoteSourceCachesForPaperContexts(
           error,
         });
       }
-      if (options?.shouldContinue?.() === false) return;
+      if (!hadPageText && getCachedPageTextForAttachment(contextItemId)) {
+        result.addedPageTextContextItemIds.push(contextItemId);
+      }
+      if (options?.shouldContinue?.() === false) return result;
     }
-    if (!usesPdfPageText || paper.contentSourceMode === "mineru") {
+    if (paper && (!usesPdfPageText || paper.contentSourceMode === "mineru")) {
       await ensureQuoteSourceTextCachedForPaper(paper);
     }
   }
+  return result;
+}
+
+function hasParagraphCitations(markdown: string): boolean {
+  return /\[\[cite:/.test(markdown) && paragraphCitationIds(markdown).size > 0;
 }
 
 export function assistantMarkdownNeedsQuoteSourceSearch(
@@ -318,7 +469,8 @@ export function assistantMarkdownNeedsQuoteSourceSearch(
   return (
     /^[ \t]*>/.test(markdown || "") ||
     /\n[ \t]*>/.test(markdown || "") ||
-    quoteTokenPattern("quote", "").test(markdown || "")
+    quoteTokenPattern("quote", "").test(markdown || "") ||
+    hasParagraphCitations(markdown || "")
   );
 }
 
@@ -341,6 +493,16 @@ export function assistantMarkdownNeedsBackgroundQuoteSearch(
     },
   );
   if (hasUnresolvedAnchor) return true;
+  // A paragraph citation with a record still needs its page located; an id
+  // without a record has nothing to locate.
+  if (hasParagraphCitations(markdown || "")) {
+    const recordedIds = new Set(
+      (quoteCitations || []).map((citation) => citation.id),
+    );
+    for (const id of paragraphCitationIds(markdown)) {
+      if (recordedIds.has(id) && !knownIds.has(id)) return true;
+    }
+  }
   const withoutEmptyBlockquotes = withoutResolvedAnchors.replace(
     /^[ \t]*>[ \t]*$/gm,
     "",

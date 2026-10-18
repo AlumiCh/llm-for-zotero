@@ -401,6 +401,7 @@ describe("user skill bootstrap upgrades", function () {
     ["compare-papers", 9],
     ["compare-papers", 10],
     ["evidence-based-qa", 8],
+    ["evidence-based-qa", 12],
     ["literature-review", 11],
     ["literature-review", 12],
   ] as const) {
@@ -603,6 +604,7 @@ describe("user skill bootstrap upgrades", function () {
     "evidence-based-qa-v8",
     "evidence-based-qa-v9",
     "evidence-based-qa-v10",
+    "evidence-based-qa-v12",
     "compare-papers-v7",
     "compare-papers-v9",
     "compare-papers-v10",

@@ -20,10 +20,7 @@ import {
   type TaskPaperScopeListing,
 } from "../../../agent/context/taskPaperScopeListing";
 import { libraryIndexService } from "../../../services/libraryIndexService";
-import {
-  navigateChatToMessage,
-  reconcileChatScroll,
-} from "../chatScrollSnapshots";
+import { reconcileChatScroll } from "../chatScrollSnapshots";
 import {
   chatHistory,
   getCancelledRequestId,
@@ -470,19 +467,6 @@ export function mountTaskProgressPanel(body: Element): TaskProgressView | null {
       // The row came or went without a sync (a run's steps, a paper read in
       // depth): the button follows.
       onVisibilityChange: () => paintTaskProgressToggle(body),
-      navigateToCitation: (card) => {
-        const key = mounted.conversationKey;
-        const navigated =
-          key &&
-          navigateChatToMessage({
-            conversationKey: key,
-            chatBox: chatBox as HTMLDivElement,
-            targetElement: card,
-            behavior: "auto",
-            viewportOffsetTop: Math.max(0, chatBox.clientHeight / 3),
-          });
-        if (!navigated) card.scrollIntoView?.({ block: "center" });
-      },
       layout: win
         ? {
             motionMs: () => transitionMs(win.getComputedStyle(drawer)),

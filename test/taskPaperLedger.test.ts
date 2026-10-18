@@ -1551,6 +1551,7 @@ describe("taskPaperLedger", function () {
         label: "Smith 2021",
         sectionLabel: "Results",
         pageLabel: "7",
+        contextItemId: 201,
       });
       assert.equal(ledger.papers["3:104"].state, "cited");
       const snapshot = JSON.stringify(ledger);

@@ -15,6 +15,7 @@ import { splitQuoteAtEllipsisInOrder } from "../../services/quotes/quoteTextSear
 import {
   normalizeWrappedCitationLabel,
   parseStandaloneCitationLabel,
+  stripCitationLabelDecoration,
 } from "../../services/quotes/citationLabelParser";
 import { resolveQuoteCitationLookupText } from "./quoteNavigationText";
 import { quoteTokenPattern } from "../../services/quotes/quoteTokenIds";
@@ -257,7 +258,9 @@ function createOccurrenceFromCitation(
 
 function parseSourceLabel(value: string): string {
   const parsed = parseStandaloneCitationLabel(value);
-  return parsed ? normalizeWrappedCitationLabel(value) : "";
+  return parsed
+    ? normalizeWrappedCitationLabel(stripCitationLabelDecoration(value))
+    : "";
 }
 
 function containsStructuredQuoteAnchor(value: string): boolean {
@@ -294,6 +297,8 @@ function parseLeadingCitationLine(value: string): {
   remainder: string;
 } | null {
   const text = normalizeMultilineText(value);
+  const wholeLineLabel = parseSourceLabel(text);
+  if (wholeLineLabel) return { citationLabel: wholeLineLabel, remainder: "" };
   if (!text.startsWith("(")) return null;
   let depth = 0;
   for (let index = 0; index < text.length; index += 1) {
@@ -341,6 +346,66 @@ function createLegacyOccurrence(params: {
     pageHintIndex: citation?.pageHintIndex,
     pageHintLabel: citation?.pageHintLabel,
   };
+}
+
+/**
+ * Bind a displayed quote to its citation, one complete occurrence per
+ * ellipsis-separated segment. Every segment must bind, or none is returned.
+ */
+function bindDisplayedQuoteSegments(
+  citation: QuoteCitation,
+  quoteText: string,
+): QuoteCitation[] | undefined {
+  const displayedSegments = splitQuoteAtEllipsisInOrder(quoteText);
+  const quoteSegments =
+    displayedSegments.length > 1 ? displayedSegments : [quoteText];
+  const rebounds = quoteSegments.map((segment) =>
+    bindQuoteCitationToDisplayedText(citation, segment),
+  );
+  return rebounds.length &&
+    rebounds.every((rebound): rebound is QuoteCitation => Boolean(rebound))
+    ? rebounds
+    : undefined;
+}
+
+/**
+ * Shortest blockquote that may bind by containment; the same bound as the
+ * rule that keeps a citation shown as a blockquote (selectUsedQuoteCitations).
+ */
+const MIN_BLOCKQUOTE_CONTAINMENT_CHARS = 24;
+
+function collapseQuoteWhitespace(value: unknown): string {
+  return normalizeMultilineText(value).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * A label-less blockquote whose text one citation's passage contains, bound
+ * to that passage. Text that no passage contains (the model's own words),
+ * short fragments, and text that binds to passages of different sources stay
+ * unbound.
+ */
+function bindContainingQuoteCitation(
+  quoteCitations: readonly QuoteCitation[],
+  quoteLines: string[],
+  quoteText: string,
+): QuoteCitation | undefined {
+  const block = collapseQuoteWhitespace(quoteLines.join(" "));
+  if (block.length < MIN_BLOCKQUOTE_CONTAINMENT_CHARS) return undefined;
+  const bound: QuoteCitation[] = [];
+  for (const citation of quoteCitations) {
+    if (!collapseQuoteWhitespace(citation.quoteText).includes(block)) continue;
+    const rebound = bindQuoteCitationToDisplayedText(citation, quoteText);
+    if (rebound) bound.push(rebound);
+  }
+  const sources = new Set(
+    bound.map((citation) =>
+      [
+        citation.contextItemId ?? citation.itemId ?? "",
+        normalizeWrappedCitationLabel(citation.citationLabel),
+      ].join("\u241f"),
+    ),
+  );
+  return sources.size === 1 ? bound[0] : undefined;
 }
 
 export function buildQuoteRenderPlan(
@@ -415,10 +480,22 @@ export function buildQuoteRenderPlan(
   const paragraphCitations: QuoteCitation[][] = [];
   const inlineMarkdown = transformParagraphCitations(
     input.markdown || "",
-    (ids) => {
+    (ids, malformed) => {
       const citations = ids.flatMap((id) =>
         citationsById.get(id) ? [citationsById.get(id)!] : [],
       );
+      // The reader never sees a removed id, so the plan records each one.
+      for (const id of [
+        ...ids.filter((entry) => !citationsById.has(entry)),
+        ...malformed,
+      ]) {
+        diagnostics.push({
+          kind: "unresolved-anchor",
+          message:
+            "Paragraph citation id did not have a matching citation record.",
+          quoteCitationId: id,
+        });
+      }
       if (!citations.length) return "";
       paragraphCitations.push(citations);
       return `LLMPAPERCITE${paragraphCitations.length - 1}END`;
@@ -465,13 +542,19 @@ export function buildQuoteRenderPlan(
     const adjacentCitation = adjacentAnchor
       ? citationsById.get(adjacentAnchor.quoteCitationId)
       : undefined;
-    const adjacentBinding = adjacentCitation
-      ? bindQuoteCitationToDisplayedText(adjacentCitation, blockquoteMarkdown)
+    const adjacentBindings = adjacentCitation
+      ? bindDisplayedQuoteSegments(
+          adjacentCitation,
+          splitTrailingCitationLine(quoteLines)?.quoteText ||
+            blockquoteMarkdown,
+        )
       : undefined;
-    if (adjacentAnchor && adjacentBinding) {
+    if (adjacentAnchor && adjacentBindings) {
       out.push(
-        pushOccurrence(
-          createOccurrenceFromCitation(adjacentBinding, nextOccurrenceIndex()),
+        ...adjacentBindings.map((binding) =>
+          pushOccurrence(
+            createOccurrenceFromCitation(binding, nextOccurrenceIndex()),
+          ),
         ),
       );
       index = adjacentAnchor.lineIndex;
@@ -482,24 +565,10 @@ export function buildQuoteRenderPlan(
         parseStructuredBlockquoteQuoteBinding(quoteLines);
       if (structuredBinding?.quoteText) {
         const citation = citationsById.get(structuredBinding.quoteCitationId);
-        const displayedSegments = splitQuoteAtEllipsisInOrder(
-          structuredBinding.quoteText,
-        );
-        const quoteSegments =
-          displayedSegments.length > 1
-            ? displayedSegments
-            : [structuredBinding.quoteText];
         const rebounds = citation
-          ? quoteSegments.map((quoteText) =>
-              bindQuoteCitationToDisplayedText(citation, quoteText),
-            )
-          : [];
-        if (
-          rebounds.length &&
-          rebounds.every((rebound): rebound is QuoteCitation =>
-            Boolean(rebound),
-          )
-        ) {
+          ? bindDisplayedQuoteSegments(citation, structuredBinding.quoteText)
+          : undefined;
+        if (rebounds) {
           out.push(
             ...rebounds.map((rebound) =>
               pushOccurrence(
@@ -619,6 +688,33 @@ export function buildQuoteRenderPlan(
       out.push(pushOccurrence(occurrence));
       if (leading.remainder) out.push(leading.remainder);
       index = cursor;
+      continue;
+    }
+
+    const containing =
+      input.allowLegacyInference !== false && quoteText
+        ? bindContainingQuoteCitation(quoteCitations, quoteLines, quoteText)
+        : undefined;
+    if (containing) {
+      const occurrence = createLegacyOccurrence({
+        quoteText,
+        citationLabel: containing.citationLabel,
+        occurrenceIndex: nextOccurrenceIndex(),
+        verifiedCitation: containing,
+      });
+      diagnostics.push({
+        kind:
+          occurrence.trust === "verified-source"
+            ? "verified-source"
+            : "legacy-inferred",
+        message:
+          "Label-less Markdown blockquote bound to the quote citation that contains it.",
+        quoteText,
+        citationLabel: occurrence.citationLabel,
+        quoteCitationId: containing.id,
+      });
+      out.push(pushOccurrence(occurrence));
+      index -= 1;
       continue;
     }
 

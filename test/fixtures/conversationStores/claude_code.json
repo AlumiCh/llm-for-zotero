@@ -3098,6 +3098,7 @@
       "repairClaudeConversationIdentityRegistry": "function",
       "setClaudeConversationTitle": "function",
       "touchClaudeConversationTitle": "function",
+      "updateClaudeAssistantMessageQuoteLocations": "function",
       "updateLatestClaudeAssistantMessage": "function",
       "updateLatestClaudeUserMessage": "function",
       "upsertClaudeConversationSummary": "function"

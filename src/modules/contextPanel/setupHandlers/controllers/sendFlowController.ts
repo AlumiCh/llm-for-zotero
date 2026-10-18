@@ -99,7 +99,15 @@ type SendFlowControllerDeps = {
     conversationKey: number,
     requestId: number,
   ) => boolean;
-  queueFollowUpInput: (text: string) => void;
+  /**
+   * Queues `text` as a follow-up. Returns false when nothing was queued. With
+   * preserveInputDraft the text did not come from the composer, so the queue
+   * must leave the composer draft alone.
+   */
+  queueFollowUpInput: (
+    text: string,
+    options: { preserveInputDraft: boolean },
+  ) => boolean;
   resolveContextSource: () => Promise<ResolvedContextSource | null>;
   closeSlashMenu: () => void;
   closePaperPicker: () => void;
@@ -152,6 +160,7 @@ type SendFlowControllerDeps = {
     text: string,
     selectedText: string,
     hasAttachmentContext: boolean,
+    selectedTextContexts?: readonly SelectedTextContext[],
   ) => string;
   buildQuestionWithSelectedTextContexts: (
     selectedTexts: string[],
@@ -275,6 +284,11 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       (deps.requireCurrentOwnership &&
         !deps.requireCurrentOwnership(item, "send"))
     ) {
+      // The composer arm leaves its draft in place; the preserve arm's text
+      // lives nowhere else, so hand it back.
+      if (options?.preserveInputDraft && options.overrideText.trim()) {
+        options.restoreQueuedInput();
+      }
       return;
     }
 
@@ -288,7 +302,14 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       "Preparing attached context…",
     );
     if (!request) {
-      if (rawSubmittedText) deps.queueFollowUpInput(rawSubmittedText);
+      const preserveInputDraft = Boolean(options?.preserveInputDraft);
+      const queued = rawSubmittedText
+        ? deps.queueFollowUpInput(rawSubmittedText, { preserveInputDraft })
+        : false;
+      // A refused queue (no thread key) drops the text; hand it back.
+      if (!queued && rawSubmittedText && options?.preserveInputDraft) {
+        options.restoreQueuedInput();
+      }
       return;
     }
     // Only a user cancel (or a superseding request) stops preparation.
@@ -314,7 +335,10 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       advancedModelParams: deps.getAdvancedModelParams(
         panelSelectedProfile?.entryId,
       ),
-      activeEditSession: deps.getActiveEditSession(),
+      // A queued drain is always a new turn, never an edit.
+      activeEditSession: options?.preserveInputDraft
+        ? null
+        : deps.getActiveEditSession(),
     };
     const shouldClearDraft = !options?.preserveInputDraft;
     let submittedInputRestored = false;
@@ -560,6 +584,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
               text,
               primarySelectedText,
               hasNonImageAttachments,
+              selectedContexts,
             );
       if (!resolvedPromptText && hasImageInputs) {
         resolvedPromptText = "Please analyze the attached images.";

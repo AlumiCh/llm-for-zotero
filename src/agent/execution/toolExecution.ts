@@ -93,6 +93,11 @@ export type ToolExecutionRecord = {
   input?: unknown;
   content?: unknown;
   actionReceipts?: AgentActionReceipt[];
+  /**
+   * For paper_read: whether the read added evidence the turn lacked. A read
+   * that added none is navigation, not progress (`turnBoundary.ts`).
+   */
+  frontier?: "advanced" | "unchanged" | "unavailable";
 };
 
 /**
@@ -925,6 +930,9 @@ export function createToolExecution(deps: ToolExecutionDeps): ToolExecution {
       input: executedCall.input,
       content: toolResult.content,
       actionReceipts: toolResult.actionReceipts,
+      ...(paperEvidenceFrontierState
+        ? { frontier: paperEvidenceFrontierState }
+        : {}),
     });
     if (toolResult.ok) {
       if (paperEvidenceFrontierState !== "unchanged") {

@@ -520,6 +520,12 @@ export async function updateLatestCodexAssistantMessage(
   return store.updateLatestAssistantMessage(...args);
 }
 
+export async function updateCodexAssistantMessageQuoteLocations(
+  ...args: Parameters<typeof store.updateAssistantMessageQuoteLocations>
+) {
+  return store.updateAssistantMessageQuoteLocations(...args);
+}
+
 export async function getCodexConversationSummary(
   ...args: Parameters<typeof store.getSummary>
 ) {

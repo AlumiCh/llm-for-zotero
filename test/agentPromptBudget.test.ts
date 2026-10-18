@@ -460,6 +460,50 @@ describe("agent prompt budget", function () {
     assert.equal(modelFacing.snippets[0].paperContext.contextItemId, "30000");
   });
 
+  it("keeps paper rows when long snippets must be reduced", function () {
+    const evidence = buildEvidenceToolMessage(80);
+    const payload = JSON.parse(evidence.content as string);
+    for (const snippet of payload.snippets) {
+      snippet.snippet = `${snippet.snippet} ${"D".repeat(4_000)}`;
+    }
+    evidence.content = JSON.stringify(payload);
+    const result = enforceAgentPromptBudget({
+      messages: [
+        { role: "system", content: "Use tools." },
+        { role: "user", content: "Find evidence." },
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call-1",
+              name: "library_retrieve",
+              arguments: { query: "representational drift" },
+            },
+          ],
+        },
+        evidence,
+      ],
+      model: "claude-haiku-4-5",
+      inputTokenCap: 10_000,
+      conversationKey: 2,
+      resourceSignature: "scope-a",
+    });
+    const tool = result.messages.find((message) => message.role === "tool");
+    const modelFacing = JSON.parse((tool as { content: string }).content);
+    assert.isTrue(modelFacing.modelContextCompacted);
+    assert.isNotEmpty(modelFacing.snippets, "snippets still fit");
+    assert.isNotEmpty(modelFacing.paperMatches, "paper rows survive");
+    const rowIds = new Set(
+      modelFacing.paperMatches.map((row: { itemId: unknown }) =>
+        String(row.itemId),
+      ),
+    );
+    for (const snippet of modelFacing.snippets) {
+      assert.isTrue(rowIds.has(String(snippet.itemId)), snippet.itemId);
+    }
+  });
+
   it("preserves the original paper-evidence handle and progress when reducing its payload", function () {
     const evidence = buildEvidenceToolMessage(80);
     evidence.name = "paper_read";

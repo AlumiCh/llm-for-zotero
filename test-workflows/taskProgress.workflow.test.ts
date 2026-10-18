@@ -888,7 +888,9 @@ describe("workflow: task progress", function () {
       assert.equal(view.count(), "3 of 6 read · 1 cited");
       await capture(shotWindow, `task-progress-${surface}-completed.png`);
 
-      // "Cited in answer" collapses the drawer and brings the chip into view.
+      // "Cited in answer" asks the panel to open the quote in its paper; the
+      // drawer stays open. The reader itself is covered by the passage
+      // source workflow, so the request is caught before the panel here.
       view.box.scrollTop = 0;
       await Zotero.Promise.delay(50);
       view.row.click();
@@ -903,26 +905,46 @@ describe("workflow: task progress", function () {
       const link = citedItem.querySelector(
         ".llm-task-paper-citation",
       ) as HTMLButtonElement;
-      assert.isOk(link, "the cited paper links to its chip");
-      link.click();
-      assert.equal(
-        view.drawer.dataset.state,
-        "closing",
-        "the link rolls the drawer up",
+      assert.isOk(link, "the cited paper lists the quote");
+      // A quote that wraps keeps every line inside its link: the next link
+      // starts below it. Zotero's macOS window caps every button at 25px.
+      const linkRect = link.getBoundingClientRect();
+      assert.isAbove(
+        linkRect.height,
+        30,
+        `the quote wraps in the test layout (${surface})`,
       );
-      const card = Array.from(
-        view.box.querySelectorAll(".llm-quote-citation-anchor"),
-      ).find(
-        (node) => (node as HTMLElement).dataset.quoteCitationId === citation.id,
-      ) as HTMLElement;
-      assert.isOk(card, "the answer renders the cited chip");
-      assert.isTrue(card.classList.contains("llm-task-progress-flash"));
+      assert.isAtMost(
+        link.scrollHeight,
+        Math.ceil(linkRect.height),
+        `the wrapped quote fits inside its link (${surface})`,
+      );
+      const requests: any[] = [];
+      const catchRequest = (event: Event) => {
+        requests.push((event as CustomEvent).detail);
+        event.stopPropagation();
+      };
+      citedItem.addEventListener(
+        "llm-task-progress-open-passage",
+        catchRequest,
+      );
+      try {
+        link.click();
+      } finally {
+        citedItem.removeEventListener(
+          "llm-task-progress-open-passage",
+          catchRequest,
+        );
+      }
+      assert.lengthOf(requests, 1, "the link asks to open its quote");
+      assert.include(requests[0], {
+        itemId: paperId(3),
+        granularity: "passage",
+      });
+      assert.include(requests[0].rawSnippet, quote.slice(0, 40));
+      assert.equal(view.drawer.dataset.state, "open", "the drawer stays open");
+      view.row.click();
       await settle(view, "closed", `citation (${surface})`);
-      await Zotero.Promise.delay(150);
-      const cardRect = card.getBoundingClientRect();
-      const boxRect = view.box.getBoundingClientRect();
-      assert.isAtLeast(cardRect.bottom, boxRect.top, "the chip is in view");
-      assert.isAtMost(cardRect.top, boxRect.bottom, "the chip is in view");
       assert.equal(
         doc.querySelectorAll(
           ".llm-plan-progress-floating, .llm-plan-container-execution",

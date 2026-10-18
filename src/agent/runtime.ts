@@ -75,18 +75,38 @@ import {
 import type { RunStopRule } from "./loop/stopRules";
 import { namedItemTargets, toolFailureReason } from "./loop/paperFailures";
 import {
+  buildResumeNote,
+  buildSearchRecord,
+  classifyModelFailure,
+  MODEL_STEP_RETRIES,
+  rejectsToolChoiceNone,
+  recordedStopRule,
+  renderFinalOnlyInstruction,
+  renderSearchCheckpoint,
+  renderSearchExhaustedFallback,
+  renderStoppedTurnText,
+  SEARCH_EXHAUSTED_REASON,
+  searchScopeLabel,
+  TurnBoundary,
+  type RoundProgressReport,
+  type TurnSafetyLimits,
+} from "./loop/turnBoundary";
+import {
   LongJobPager,
   priorPaperTokens,
   readLongJob,
   renderLongJobMessage,
   renderLongJobRecord,
+  renderUnfinishedParts,
   settledTargetCount,
 } from "./loop/longJob";
 import {
   applyOutcomeEvidence,
+  closeOpenOutcomes,
   declaresReadPart,
   decideRunEnd,
   OUTCOME_REASONS,
+  openDeclaredOutcomes,
   reconcileJournaledReceipts,
   resumesOnContinue,
   settleOutcomes,
@@ -182,7 +202,6 @@ import {
   readLatestTranscriptGoal,
 } from "./execution/transcriptRecovery";
 import {
-  buildToolProgressFingerprint,
   isUserDeniedToolResult,
   setToolResultReadAvailability,
 } from "./execution/toolResultLifecycle";
@@ -223,6 +242,16 @@ type AgentRuntimeDeps = {
    * {@link STOPPED_RUN_WAIT_MS} unless a test exercises the bound.
    */
   stoppedRunWaitMs?: number;
+  /**
+   * The per-turn safety limits (`turnBoundary.ts`, Rule 3); the defaults
+   * unless a test exercises a limit without a hundred model steps.
+   */
+  turnLimits?: Partial<TurnSafetyLimits>;
+  /**
+   * The waits before the retries of a failed model step (Rule 4); the
+   * defaults unless a test exercises the retries without waiting.
+   */
+  modelRetryBackoffMs?: readonly number[];
 };
 
 /**
@@ -326,6 +355,64 @@ class StoppedBeforeStep extends Error {
   }
 }
 
+/**
+ * Thrown by a model attempt that failed: the error, the text it streamed
+ * before failing, and whether it reached a tool call.
+ */
+class ModelAttemptFailed extends Error {
+  constructor(
+    readonly failure: unknown,
+    readonly streamedText: string,
+    readonly toolCallSeen: boolean,
+  ) {
+    super(failure instanceof Error ? failure.message : String(failure));
+  }
+}
+
+/**
+ * Thrown by a model step the retry policy gave up on (`turnBoundary.ts`,
+ * Rule 4); the loop ends the run with its rule.
+ */
+class ModelStepAbandoned extends Error {
+  constructor(
+    readonly rule: "connection_lost" | "prompt_budget_exceeded",
+    readonly failure: unknown,
+  ) {
+    super(failure instanceof Error ? failure.message : String(failure));
+  }
+}
+
+/**
+ * Thrown when the request that asked again for an empty final-only answer
+ * failed fatally; the loop ends the turn with the host's answer.
+ */
+class FinalOnlyAnswerUnwritten extends Error {
+  constructor(readonly failure: unknown) {
+    super(failure instanceof Error ? failure.message : String(failure));
+  }
+}
+
+/** Waits `ms`, or rejects with an AbortError once `signal` aborts. */
+function waitUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const aborted = () => {
+      const error = new Error("Aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (signal?.aborted) return aborted();
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      aborted();
+    };
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
+}
+
 /** Whether `settling` resolves within `ms`. */
 function settlesWithin(settling: Promise<void>, ms: number): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
@@ -379,6 +466,8 @@ export class AgentRuntime {
   private readonly reanchorCitations: typeof reanchorQuoteCitationsToClaims;
   private readonly resolveTurnScopePapers?: AgentRuntimeDeps["resolveTurnScopePapers"];
   private readonly stoppedRunWaitMs: number;
+  private readonly turnLimits?: Partial<TurnSafetyLimits>;
+  private readonly modelRetryBackoffMs?: readonly number[];
   private readonly pendingConfirmations = new Map<
     string,
     PendingConfirmation
@@ -393,6 +482,8 @@ export class AgentRuntime {
       deps.reanchorCitations || reanchorQuoteCitationsToClaims;
     this.resolveTurnScopePapers = deps.resolveTurnScopePapers;
     this.stoppedRunWaitMs = deps.stoppedRunWaitMs ?? STOPPED_RUN_WAIT_MS;
+    this.turnLimits = deps.turnLimits;
+    this.modelRetryBackoffMs = deps.modelRetryBackoffMs;
   }
 
   listTools() {
@@ -784,6 +875,10 @@ export class AgentRuntime {
             ? params.onWaiting?.("Waiting for the stopped run to finish")
             : undefined,
       });
+      // The turn's own clock starts here, once a stopped run before it has
+      // settled: the safety limits count from this moment (turnBoundary.ts,
+      // Rule 3).
+      const turnStartedAt = this.now();
       const interruptedPriorRun =
         latestPriorRun?.status === "failed" &&
         latestPriorRun.finalText === INTERRUPTED_AGENT_RUN_MARKER
@@ -1194,6 +1289,14 @@ export class AgentRuntime {
           ? [...transcriptMessagesForPrompt, recoveryMessage]
           : [recoveryMessage];
       }
+      // The prior run's events, read once, when the whole message asks to
+      // continue it.
+      const continuesPriorRun =
+        Boolean(latestPriorRun) && isExplicitContinueCommand(request.userText);
+      let priorRunEvents = interruptedTraceEvents;
+      const readPriorRunEvents = async () =>
+        (priorRunEvents ??= (await getAgentRunTrace(latestPriorRun!.runId))
+          .events);
       // An interrupted ledger, or one the user stopped with a part still open,
       // resumes only when the whole message asks to continue; any other
       // message starts with no ledger.
@@ -1201,11 +1304,9 @@ export class AgentRuntime {
         !request.executionCheckpoint &&
         latestPriorRun &&
         recordsOutcomes() &&
-        isExplicitContinueCommand(request.userText)
+        continuesPriorRun
       ) {
-        const priorEvents =
-          interruptedTraceEvents ??
-          (await getAgentRunTrace(latestPriorRun.runId)).events;
+        const priorEvents = await readPriorRunEvents();
         const interruptedLedger = latestExecutionCheckpoint(priorEvents);
         if (
           interruptedLedger &&
@@ -1269,6 +1370,23 @@ export class AgentRuntime {
             materialOutcomes: request.materialOutcomes,
             resumableBatches,
           });
+      // A "continue" after a turn that a resumable rule stopped (a safety
+      // limit, a lost connection, a prompt too long, a search that ran out)
+      // gets a prompt-only note, with or without parts: the turn's work is
+      // the saved transcript.
+      let resumeNoteMessage: AgentUserMessage | null = null;
+      if (continuesPriorRun && !recoveryMessage) {
+        try {
+          const rule = recordedStopRule(await readPriorRunEvents());
+          const note = rule ? buildResumeNote(rule) : undefined;
+          if (note) resumeNoteMessage = { role: "user", content: note };
+        } catch (error) {
+          logRuntimeWarning(
+            "LLM Agent: reading the stopped run for its resume note failed",
+            error,
+          );
+        }
+      }
       const conversationReferenceMessage = buildConversationReferenceMessage(
         transcriptSegment.messages,
       );
@@ -1284,6 +1402,7 @@ export class AgentRuntime {
             : []),
           ...(retainedActionMessage ? [retainedActionMessage] : []),
           ...(turnStartRecoveryMessage ? [turnStartRecoveryMessage] : []),
+          ...(resumeNoteMessage ? [resumeNoteMessage] : []),
         ];
       };
 
@@ -1688,15 +1807,44 @@ export class AgentRuntime {
         await emit({ type: "status", text: `Skill activated: ${skillId}` });
       }
 
-      let consecutiveToolErrorRounds = 0;
-      // Rejected input never ran, so it is a repair opportunity, not a failing
-      // tool. It gets its own, more forgiving cap.
-      let consecutiveInputRejectionRounds = 0;
       const extendedRunLimits = request.metadata?.hostRecordedBatchJob === true;
       const { maxRounds, maxToolCallsPerRound } =
         resolveAgentLimits(extendedRunLimits);
       const finalAnswerController = new AgentFinalAnswerController(request);
-      let toolCallOverflowCorrectionUsed = false;
+      // Every whole-turn stop decision (loop/turnBoundary.ts): the failure
+      // counters, navigation without evidence, the safety limits and the
+      // retry policy. Rejected input never ran, so it is a repair
+      // opportunity, not a failing tool, with its own, more forgiving cap.
+      const turnBoundary = new TurnBoundary({
+        now: turnStartedAt,
+        maxRounds,
+        settledTargets: settledTargetCount(request.executionCheckpoint),
+        limits: this.turnLimits,
+        retryBackoffMs: this.modelRetryBackoffMs,
+      });
+      const searchScope = searchScopeLabel(request.turnPaperScope);
+      /** How many of the turn's declared parts are done, for a stop text. */
+      const partsProgress = () => {
+        const tasks = (request.executionCheckpoint?.tasks || []).filter(
+          (task) => task.origin === "model" && !task.supersededBy,
+        );
+        return {
+          done: tasks.filter((task) => task.status === "completed").length,
+          total: tasks.length,
+        };
+      };
+      // The last round whose progress classification was published.
+      let lastClassifiedRound = 0;
+      const publishRoundProgress = async (
+        report: RoundProgressReport,
+      ): Promise<void> => {
+        lastClassifiedRound = report.round;
+        await emit({
+          type: "provider_event",
+          providerType: "agent_round_progress",
+          payload: { ...report },
+        });
+      };
       const shouldFlushStreamBuffer = (value: string): boolean => {
         if (!value) return false;
         if (value.length >= 8) return true;
@@ -1851,6 +1999,8 @@ export class AgentRuntime {
         options: {
           /** Answer text already held by earlier transcript messages. */
           transcriptPrefix?: string;
+          /** The rule the answer ends the run with; a plain final answer. */
+          stopRule?: Extract<RunStopRule, "final_answer" | "search_exhausted">;
         } = {},
       ): Promise<AgentRuntimeOutcome> => {
         // A provider may repeat the committed text at the start of its final
@@ -1861,9 +2011,22 @@ export class AgentRuntime {
           modelFinalText.length - webAttribution.cleanText.length,
         )!;
         const receiptStatus = actionContractSession.receiptStatus();
-        const finalText = receiptStatus
-          ? `${modelFinalText}\n\n${receiptStatus}`
-          : modelFinalText;
+        // Parts still open after the answer end the run not done: the answer
+        // says so, whatever the model claimed.
+        const unfinished = recordsOutcomes()
+          ? renderUnfinishedParts(
+              openDeclaredOutcomes(request.executionCheckpoint),
+              OUTCOME_REASONS.noText,
+            )
+          : "";
+        const finalText = [
+          receiptStatus
+            ? `${modelFinalText}\n\n${receiptStatus}`
+            : modelFinalText,
+          unfinished,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
         if (finalText) {
           if (!stepStreamedText) {
             currentAnswerText = `${committedAnswerText}${finalText}`;
@@ -1884,9 +2047,12 @@ export class AgentRuntime {
             currentAnswerText = `${committedAnswerText}${finalText}`;
           }
         }
-        return await completeRun(finalText, "completed", "final_answer", {
-          webAttribution,
-        });
+        return await completeRun(
+          finalText,
+          "completed",
+          options.stopRule ?? "final_answer",
+          { webAttribution },
+        );
       };
       const providerTerminalOutcomes: ToolWorkflowOutcome[] = [];
       const rollbackCommittedStreamedText = async (
@@ -1957,9 +2123,22 @@ export class AgentRuntime {
         committedAnswerText += `${segment}${separator}`;
         return streamed;
       };
-      const runModelStep = async (
+      /**
+       * One provider request for the round's model step. A failure is
+       * thrown as ModelAttemptFailed, with the text the attempt streamed and
+       * whether it reached a tool call; runModelStep decides on a retry.
+       */
+      // Set when the provider refused `tool_choice` none: the final-only
+      // step is then sent with its default choice, and any tool call it
+      // returns is refused (turnBoundary.ts, Rule 2).
+      let toolChoiceNoneRejected = false;
+      // A final-only step that wrote no visible text is asked once more; a
+      // fatal failure of that request ends the turn with the host's answer.
+      let finalOnlyEmptyAnswerReasked = false;
+      const attemptModelStep = async (
         round: number,
         statusText: string,
+        attempt: number,
       ): Promise<{ step: AgentModelStep; stepStreamedText: string }> => {
         if (params.signal?.aborted) {
           await recordUnfinishedPage?.().catch((error) =>
@@ -2072,11 +2251,20 @@ export class AgentRuntime {
         // The provider bills from here on, abort included, so the turn owes a
         // usage row even if this round never finishes.
         usageRecorder.markDispatched();
-        const step = await adapter.runStep({
+        // A retried request is billed on its own, beside the one that failed.
+        const usageSegment = attempt ? `${round}.${attempt}` : round;
+        // The prompt tokens the provider reported for this request, for the
+        // turn's safety limit; and whether it reached a tool call.
+        let attemptInputTokens = 0;
+        let toolCallSeen = false;
+        const attemptRequest = adapter.runStep({
           request,
           messages: modelInput.messages,
           continuationMessages: modelInput.continuationMessages,
           tools: stepToolSpecs,
+          ...(turnBoundary.finalOnly && !toolChoiceNoneRejected
+            ? { toolChoice: "none" as const }
+            : {}),
           signal: params.signal,
           onTextDelta: async (delta) => {
             if (!delta) return;
@@ -2101,11 +2289,12 @@ export class AgentRuntime {
             // One agent round is one provider request: its counters are
             // cumulative within the round, and each round is billed on top of
             // the previous one.
-            usageRecorder.record(usage, { segment: round });
+            usageRecorder.record(usage, { segment: usageSegment });
             const usageRecord = usage as unknown as Record<string, unknown>;
             const totalTokens = Math.max(0, usage.totalTokens || 0);
             const promptTokens = Math.max(0, usage.promptTokens || 0);
             const completionTokens = Math.max(0, usage.completionTokens || 0);
+            attemptInputTokens = Math.max(attemptInputTokens, promptTokens);
             const contextTokens =
               typeof usageRecord.contextTokens === "number" &&
               Number.isFinite(usageRecord.contextTokens)
@@ -2206,6 +2395,10 @@ export class AgentRuntime {
             });
           },
           onToolCall: async (call) => {
+            // Native adapters run tools only after a step completes; an
+            // adapter that runs them during a step does it here, and a step
+            // that failed after one ran is never retried.
+            toolCallSeen = true;
             const committedSegment = await settleStepStreamedText();
             const outcome = await toolExecution.executeToolWorkflow(
               call,
@@ -2249,12 +2442,112 @@ export class AgentRuntime {
             return buildAdapterToolCallResult(outcome);
           },
         });
+        const step = await attemptRequest
+          .catch(async (error: unknown) => {
+            // What the attempt streamed is on screen; the caller rolls it
+            // back before a retry.
+            await flushStepDelta();
+            throw new ModelAttemptFailed(error, stepStreamedText, toolCallSeen);
+          })
+          .finally(() => turnBoundary.recordModelCall(attemptInputTokens));
         continuationSession.commitProviderResponse();
         await flushStepDelta();
         return {
           step,
           stepStreamedText,
         };
+      };
+      /**
+       * The round's model step under the turn's one retry policy
+       * (turnBoundary.ts, Rule 4): a network error, a broken stream or an
+       * HTTP 429/5xx/529 is sent again after a wait, at most
+       * MODEL_STEP_RETRIES times, unless the failed attempt reached a tool
+       * call; a prompt the provider calls too long is compacted once. The
+       * text a failed attempt streamed is rolled back first.
+       */
+      const runModelStep = async (
+        round: number,
+        statusText: string,
+      ): Promise<{ step: AgentModelStep; stepStreamedText: string }> => {
+        for (let attempt = 0; ; attempt += 1) {
+          let result: { step: AgentModelStep; stepStreamedText: string };
+          try {
+            result = await attemptModelStep(round, statusText, attempt);
+          } catch (error) {
+            if (!(error instanceof ModelAttemptFailed)) throw error;
+            if (params.signal?.aborted) throw error.failure;
+            if (
+              turnBoundary.finalOnly &&
+              !toolChoiceNoneRejected &&
+              rejectsToolChoiceNone(error.failure)
+            ) {
+              // The provider has no tool_choice none: send the step with its
+              // default choice; the loop refuses any tool call it returns.
+              toolChoiceNoneRejected = true;
+              await rollbackCommittedStreamedText(error.streamedText);
+              await emit({
+                type: "provider_event",
+                providerType: "agent_model_retry",
+                payload: {
+                  round,
+                  action: "tool_choice_default",
+                  error: redactRunTerminalText(error.message).slice(0, 300),
+                },
+              });
+              continue;
+            }
+            const decision = turnBoundary.onModelFailure(
+              classifyModelFailure(error.failure),
+              { toolCallSeen: error.toolCallSeen },
+            );
+            if (decision.kind === "throw") {
+              if (turnBoundary.finalOnly && finalOnlyEmptyAnswerReasked)
+                throw new FinalOnlyAnswerUnwritten(error.failure);
+              throw error.failure;
+            }
+            await rollbackCommittedStreamedText(error.streamedText);
+            await emit({
+              type: "provider_event",
+              providerType: "agent_model_retry",
+              payload: {
+                round,
+                action: decision.kind,
+                ...(decision.kind === "retry"
+                  ? { retry: decision.retry, delayMs: decision.delayMs }
+                  : {}),
+                ...(decision.kind === "stop" ? { rule: decision.rule } : {}),
+                toolCallSeen: error.toolCallSeen,
+                error: redactRunTerminalText(error.message).slice(0, 300),
+              },
+            });
+            if (decision.kind === "stop")
+              throw new ModelStepAbandoned(decision.rule, error.failure);
+            if (decision.kind === "compact") {
+              await emit({ type: "status", text: "Compacting context…" });
+              await restartFromSemanticCheckpoint({ sourceMessages: messages });
+              await emit({
+                type: "provider_event",
+                providerType: "agent_context_budget",
+                payload: { action: "compacted_after_prompt_too_long" },
+              });
+              continue;
+            }
+            await emit({
+              type: "status",
+              text: `Connection to the model failed; retrying (${decision.retry} of ${MODEL_STEP_RETRIES})`,
+            });
+            await waitUnlessAborted(decision.delayMs, params.signal);
+            continue;
+          }
+          if (
+            !(
+              result.step.kind === "incomplete" &&
+              result.step.reason === "stream_interrupted"
+            )
+          )
+            turnBoundary.modelStepSucceeded();
+          return result;
+        }
       };
       const requestActionResolution = async (
         action: AgentPendingAction,
@@ -2273,7 +2566,10 @@ export class AgentRuntime {
           requestId,
           action,
         });
+        // Time spent waiting on the user is not the turn's own.
+        const waitStarted = this.now();
         const settled = await resolution;
+        turnBoundary.excludeWait(this.now() - waitStarted);
         await emit({
           type: "confirmation_resolved",
           requestId,
@@ -2662,10 +2958,11 @@ export class AgentRuntime {
       };
       let round = 0;
       let segment = 1;
-      let streamRecoveryUsed = false;
-      const seenProgressFingerprints = new Set<string>();
+      // A final-only step that still called tools is re-asked once.
+      let finalOnlyToolCallRejected = false;
       // What the status says each round: the round, or the long job's page
-      // and its progress. Segments are progress checks, not a cap.
+      // and its progress. A segment is the span of the incomplete-step and
+      // tool-overflow limits and a durable checkpoint, not a cap.
       const roundStatus = (): string => {
         const page = recordsOutcomes()
           ? longJob.openPage(request.executionCheckpoint)
@@ -2674,25 +2971,72 @@ export class AgentRuntime {
           ? `Continuing agent (page ${page.number} · ${page.settled} of ${page.total})`
           : `Continuing agent (round ${round})`;
       };
-      // Papers a tool failed on, each failure counted by its reason; after
-      // the same failure twice the host gives up on the paper.
-      const paperFailures = new Map<string, number>();
-      // Papers given up on since the last one done, and how many in a row
-      // stop the job: a page's worth (the page the run began in, or before
-      // paging the papers left), and more than one.
-      let failedInARow = 0;
-      let failedInARowLimit = 0;
-      while (true) {
-        const segmentRecordStart = toolExecutionRecords.length;
-        const settledAtSegmentStart = settledTargetCount(
-          request.executionCheckpoint,
+      /**
+       * The answer of a turn a resumable incident stopped: what the model
+       * had streamed, then why it stopped and what it did.
+       */
+      const stoppedTurnText = (
+        rule: "budget_reached" | "connection_lost" | "prompt_budget_exceeded",
+        detail?: string,
+      ): string => {
+        const streamed = uncommittedAnswerText().trim();
+        const text = renderStoppedTurnText({
+          rule,
+          calls: toolExecutionRecords,
+          parts: partsProgress(),
+          usage: turnBoundary.usage(this.now()),
+          detail,
+        });
+        return streamed ? `${streamed}\n\n${text}` : text;
+      };
+      /** Ends a final-only step whose answer still could not be written. */
+      const endSearchExhausted = async (
+        text: string,
+      ): Promise<AgentRuntimeOutcome> => {
+        if (recordsOutcomes() && request.executionCheckpoint)
+          await updateExecutionCheckpoint((checkpoint) =>
+            closeOpenOutcomes(checkpoint, SEARCH_EXHAUSTED_REASON, this.now()),
+          );
+        return await completeRun(text, "completed", "search_exhausted");
+      };
+      /**
+       * Before a resumable stop ends the turn: a long job's open page keeps
+       * the results it read, as on Stop, so "continue" finds them.
+       */
+      const keepUnfinishedPage = (): Promise<void> =>
+        (recordUnfinishedPage?.() ?? Promise.resolve()).catch((error) =>
+          logRuntimeWarning(
+            "LLM Agent: recording a stopped page's results failed",
+            error,
+          ),
         );
+      while (true) {
         for (
           let segmentRound = 1;
           segmentRound <= maxRounds;
           segmentRound += 1
         ) {
           round += 1;
+          // A round that called no tool is published as such once the next
+          // one starts.
+          if (round > 1 && lastClassifiedRound < round - 1)
+            await publishRoundProgress(turnBoundary.noToolRound(round - 1));
+          // Rule 3: a per-turn safety limit stops the turn, resumable.
+          if (
+            !params.signal?.aborted &&
+            turnBoundary.beforeModelCall({
+              now: this.now(),
+              settledTargets: settledTargetCount(request.executionCheckpoint),
+            }).kind === "stop"
+          ) {
+            await persistTranscriptCheckpoint();
+            await keepUnfinishedPage();
+            return await completeRun(
+              stoppedTurnText("budget_reached"),
+              "failed",
+              "budget_reached",
+            );
+          }
           let stepResult: { step: AgentModelStep; stepStreamedText: string };
           try {
             stepResult = await runModelStep(
@@ -2712,6 +3056,31 @@ export class AgentRuntime {
                 "failed",
                 "prompt_budget_exceeded",
               );
+            }
+            if (err instanceof FinalOnlyAnswerUnwritten)
+              return await endSearchExhausted(
+                renderSearchExhaustedFallback(
+                  buildSearchRecord(toolExecutionRecords),
+                  searchScope,
+                ),
+              );
+            if (err instanceof ModelStepAbandoned) {
+              await persistTranscriptCheckpoint();
+              await keepUnfinishedPage();
+              return err.rule === "connection_lost"
+                ? await completeRun(
+                    stoppedTurnText(
+                      "connection_lost",
+                      redactRunTerminalText(err.message).slice(0, 200),
+                    ),
+                    "failed",
+                    "connection_lost",
+                  )
+                : await completeRun(
+                    stoppedTurnText("prompt_budget_exceeded"),
+                    "failed",
+                    "prompt_budget_exceeded",
+                  );
             }
             throw err;
           }
@@ -2781,7 +3150,7 @@ export class AgentRuntime {
               if (
                 !addsText ||
                 answerContinuations >= answerContinuationLimit ||
-                segmentRound >= maxRounds
+                turnBoundary.incompleteStepsExhausted(segmentRound)
               ) {
                 newTranscriptMessages.push(truncatedAssistantMessage);
                 const customLimit = request.advanced?.outputTokenLimit;
@@ -2823,19 +3192,31 @@ export class AgentRuntime {
               continue;
             }
             if (step.reason === "stream_interrupted") {
-              if (streamRecoveryUsed) {
+              // The adapter kept the broken step and asks for it again: the
+              // same retry policy as a thrown failure (turnBoundary.ts, Rule
+              // 4), so retries do not stack.
+              const decision = turnBoundary.onModelFailure(
+                { kind: "transient", cause: "stream" },
+                { toolCallSeen: false },
+              );
+              if (decision.kind !== "retry") {
                 await rollbackCommittedStreamedText(stepStreamedText);
+                await persistTranscriptCheckpoint();
+                await keepUnfinishedPage();
                 return await completeRun(
-                  "The response stream failed again after one automatic retry. Durable Plan progress was preserved; continue when the connection is available.",
+                  stoppedTurnText(
+                    "connection_lost",
+                    "the response stream broke",
+                  ),
                   "failed",
-                  "stream_interrupted_again",
+                  "connection_lost",
                 );
               }
-              streamRecoveryUsed = true;
               await emit({
                 type: "status",
-                text: "Response stream interrupted; retrying the unfinished step once",
+                text: `Response stream interrupted; retrying the unfinished step (${decision.retry} of ${MODEL_STEP_RETRIES})`,
               });
+              await waitUnlessAborted(decision.delayMs, params.signal);
             }
             (
               globalThis as typeof globalThis & {
@@ -2848,7 +3229,7 @@ export class AgentRuntime {
               recoveryCount: segmentRound,
             });
             await rollbackCommittedStreamedText(stepStreamedText);
-            if (segmentRound >= maxRounds) {
+            if (turnBoundary.incompleteStepsExhausted(segmentRound)) {
               const customLimit = request.advanced?.outputTokenLimit;
               const exhaustionMessage =
                 step.reason === "stream_interrupted"
@@ -2881,6 +3262,34 @@ export class AgentRuntime {
             await persistTranscriptCheckpoint();
             continue;
           }
+          // A final-only step that wrote no visible text (an empty answer,
+          // or thinking only) is asked once more with the instruction; a
+          // second time, the host writes the answer from its record. The
+          // turn never ends with an empty answer.
+          if (
+            step.kind === "final" &&
+            turnBoundary.finalOnly &&
+            !(step.text || "").trim() &&
+            !stepStreamedText.trim() &&
+            !keptAnswerModelText.trim() &&
+            !committedAnswerText.trim()
+          ) {
+            const search = buildSearchRecord(toolExecutionRecords);
+            if (finalOnlyEmptyAnswerReasked)
+              return await endSearchExhausted(
+                renderSearchExhaustedFallback(search, searchScope),
+              );
+            finalOnlyEmptyAnswerReasked = true;
+            // No empty assistant message is kept: the instruction follows
+            // as a host message (a provider rejects an empty assistant turn).
+            continuationSession.appendHostMessage({
+              role: "user",
+              transient: true,
+              content: `Your last reply had no answer text. ${renderFinalOnlyInstruction(search, searchScope)}`,
+            });
+            await persistTranscriptCheckpoint();
+            continue;
+          }
           if (step.kind === "final") {
             const returnedText = step.text || "";
             const streamedTextOffset = stepStreamedText
@@ -2895,12 +3304,14 @@ export class AgentRuntime {
                   // falling back to it (or a placeholder) would corrupt it.
                   returnedText
                 : returnedText || currentAnswerText || "No response.";
+            const finalOnly = turnBoundary.finalOnly;
             const finalDecision = await finalAnswerController.evaluate({
               candidateText: turnPathRedactor.redactTerminalText(
                 `${keptAnswerModelText}${rawModelFinalText}`,
               ),
               canCorrect: segmentRound < maxRounds,
               toolExecutionRecords,
+              finalOnly,
             });
             if (finalDecision.kind !== "accept") {
               await rollbackCommittedStreamedText(stepStreamedText);
@@ -2941,12 +3352,60 @@ export class AgentRuntime {
                 kind: "answer",
                 citedTargets: answerCitedTargets(acceptedAnswerText),
               });
+            // An answer written without tools after the search ran out
+            // closes the parts it can no longer do (turnBoundary.ts, Rule 2).
+            if (finalOnly && recordsOutcomes() && request.executionCheckpoint)
+              await updateExecutionCheckpoint((checkpoint) =>
+                closeOpenOutcomes(
+                  checkpoint,
+                  SEARCH_EXHAUSTED_REASON,
+                  this.now(),
+                ),
+              );
             return await emitFinalStep(
               step,
               `${answerPrefix}${stepStreamedText}`,
               finalDecision.webAttribution,
-              { transcriptPrefix: answerPrefix },
+              {
+                transcriptPrefix: answerPrefix,
+                stopRule: finalOnly ? "search_exhausted" : "final_answer",
+              },
             );
+          }
+
+          // A final-only step asked for no tools (turnBoundary.ts, Rule 2).
+          // A provider without that control may still call some: none runs,
+          // each gets a result saying so, and the step is asked once more;
+          // a second time, the host writes the answer from its record.
+          if (turnBoundary.finalOnly && step.calls.length) {
+            await rollbackCommittedStreamedText(stepStreamedText);
+            if (finalOnlyToolCallRejected)
+              return await endSearchExhausted(
+                renderSearchExhaustedFallback(
+                  buildSearchRecord(toolExecutionRecords),
+                  searchScope,
+                ),
+              );
+            finalOnlyToolCallRejected = true;
+            continuationSession.beginToolStep(step.assistantMessage);
+            newTranscriptMessages.push(step.assistantMessage);
+            const refusals: AgentToolMessage[] = step.calls.map((call) => ({
+              role: "tool",
+              tool_call_id: call.id,
+              name: call.name,
+              content: JSON.stringify({
+                error:
+                  "Not run: this step is for the answer, without tools. Answer now from what you have.",
+              }),
+            }));
+            newTranscriptMessages.push(
+              ...continuationSession.completeToolStep({
+                toolMessages: refusals,
+                followupMessages: [],
+              }),
+            );
+            await persistTranscriptCheckpoint();
+            continue;
           }
 
           // The step returned tool_calls, not a final answer.  A lead-in the
@@ -2970,14 +3429,13 @@ export class AgentRuntime {
             : maxToolCallsPerRound;
           if (step.calls.length > stepToolCallLimit) {
             const overflowMessage = `The model returned ${step.calls.length} tool calls in one step, exceeding the safe limit of ${stepToolCallLimit}. None of those calls were executed.`;
-            if (toolCallOverflowCorrectionUsed || segmentRound >= maxRounds) {
+            if (turnBoundary.toolCallOverflow(segmentRound) === "stop") {
               return await completeRun(
                 `${overflowMessage} Please narrow the request and try again.`,
                 "failed",
                 "tool_call_overflow",
               );
             }
-            toolCallOverflowCorrectionUsed = true;
             await restartFromSemanticCheckpoint({
               sourceMessages: messages,
               retryInstruction: `${overflowMessage} Retry with a complete new step containing at most ${stepToolCallLimit} tool calls. Do not assume that any result exists for the rejected calls.`,
@@ -2997,7 +3455,26 @@ export class AgentRuntime {
           const calls = step.calls;
           const assistantToolMessage: AgentAssistantMessage =
             step.assistantMessage;
-          if (!calls.length) break;
+          if (!calls.length) {
+            // A tool step that names no call ends the segment, as before;
+            // it counts as a tool round without progress.
+            const { decision, report } = turnBoundary.afterToolRound({
+              round,
+              calls: [],
+              settledTargets: settledTargetCount(request.executionCheckpoint),
+              now: this.now(),
+            });
+            await publishRoundProgress(report);
+            if (decision.kind === "stop")
+              return await completeRun(
+                uncommittedAnswerText() ||
+                  `Agent stopped after ${maxRounds} tool rounds produced no new successful tool result. The completed transcript was saved; narrow or redirect the request before continuing.`,
+                "failed",
+                "segment_without_progress",
+              );
+            break;
+          }
+          const roundRecordStart = toolExecutionRecords.length;
           continuationSession.beginToolStep(assistantToolMessage);
           newTranscriptMessages.push(assistantToolMessage);
           const roundToolMessages: AgentToolMessage[] = [];
@@ -3047,10 +3524,7 @@ export class AgentRuntime {
               if (!papers.length) roundHadToolFailure = true;
               const reason = toolFailureReason(outcome.toolResult.content);
               for (const target of papers) {
-                const key = `${target}\n${reason}`;
-                const failures = (paperFailures.get(key) || 0) + 1;
-                paperFailures.set(key, failures);
-                if (failures >= 2)
+                if (turnBoundary.recordPaperFailure(target, reason))
                   givenUp.set(reason, [...(givenUp.get(reason) || []), target]);
               }
             }
@@ -3105,14 +3579,11 @@ export class AgentRuntime {
           appendRoundContinuation();
           // Sibling calls are one attempt: deliver every result before judging
           // repeated failure, so the next model round can repair their inputs.
-          if (roundHadSuccessfulToolResult) {
-            consecutiveToolErrorRounds = 0;
-            consecutiveInputRejectionRounds = 0;
-          } else {
-            if (roundHadToolFailure) consecutiveToolErrorRounds += 1;
-            if (roundHadInputRejection && !roundHadToolFailure)
-              consecutiveInputRejectionRounds += 1;
-          }
+          const repeatedFailure = turnBoundary.recordToolRoundOutcome({
+            hadSuccessfulResult: roundHadSuccessfulToolResult,
+            hadToolFailure: roundHadToolFailure,
+            hadInputRejection: roundHadInputRejection,
+          });
           if (givenUp.size) {
             for (const [reason, targets] of givenUp)
               await recordOutcomeEvidence({ kind: "failed", targets, reason });
@@ -3124,18 +3595,17 @@ export class AgentRuntime {
               settledTargetCount(request.executionCheckpoint) -
               doneBeforeRound -
               given;
-            if (doneThisRound > 0) failedInARow = 0;
-            if (given && !failedInARow) {
-              const page = longJob.openPage(request.executionCheckpoint);
-              failedInARowLimit = Math.max(
-                2,
-                page ? page.targets.length : jobPapers.size,
-              );
-            }
-            failedInARow += given;
+            const failedInARow = turnBoundary.recordPapersGivenUp({
+              doneThisRound,
+              givenUp: given,
+              pageSize: () => {
+                const page = longJob.openPage(request.executionCheckpoint);
+                return page ? page.targets.length : jobPapers.size;
+              },
+            });
             // A page's worth of papers failed in a row: something beyond one
             // paper is wrong. The job stops where it is, resumable.
-            if (given && failedInARow >= failedInARowLimit) {
+            if (failedInARow !== undefined) {
               await persistTranscriptCheckpoint();
               const [reason] = [...givenUp.keys()];
               return await completeRun(
@@ -3145,13 +3615,10 @@ export class AgentRuntime {
               );
             }
           }
-          if (
-            consecutiveToolErrorRounds >= 3 ||
-            consecutiveInputRejectionRounds >= 6
-          ) {
+          if (repeatedFailure) {
             await persistTranscriptCheckpoint();
             const stopRule: RunStopRule =
-              consecutiveInputRejectionRounds >= 6
+              repeatedFailure === "repeated_input_rejections"
                 ? "repeated_input_rejections"
                 : "repeated_tool_errors";
             const finalText =
@@ -3165,37 +3632,54 @@ export class AgentRuntime {
           // A stopped run advances no page: its next step ends it, and
           // records what the open page had read.
           if (!params.signal?.aborted) await advanceLongJob();
+          // Rules 1 and 2 (turnBoundary.ts): classify the round, then go
+          // on, show the search checkpoint, ask for the answer without
+          // tools, or stop after a segment of tool rounds without progress.
+          const { decision, report } = turnBoundary.afterToolRound({
+            round,
+            calls: toolExecutionRecords.slice(roundRecordStart),
+            settledTargets: settledTargetCount(request.executionCheckpoint),
+            now: this.now(),
+          });
+          await publishRoundProgress(report);
+          if (decision.kind === "stop") {
+            const finalText =
+              uncommittedAnswerText() ||
+              `Agent stopped after ${maxRounds} tool rounds produced no new successful tool result. The completed transcript was saved; narrow or redirect the request before continuing.`;
+            return await completeRun(
+              finalText,
+              "failed",
+              "segment_without_progress",
+            );
+          }
+          if (
+            decision.kind === "checkpoint" ||
+            decision.kind === "final_only"
+          ) {
+            const search = buildSearchRecord(toolExecutionRecords);
+            continuationSession.appendHostMessage({
+              role: "user",
+              transient: true,
+              content:
+                decision.kind === "checkpoint"
+                  ? renderSearchCheckpoint(search, searchScope)
+                  : renderFinalOnlyInstruction(search, searchScope),
+            });
+            await emit({
+              type: "provider_event",
+              providerType: "agent_search_boundary",
+              payload: {
+                round,
+                action: decision.kind,
+                queries: search.queries.length,
+                listed: search.listed.length,
+                read: search.read.length,
+                metadataLookups: search.metadataLookups,
+              },
+            });
+          }
         }
 
-        const newFingerprints = toolExecutionRecords
-          .slice(segmentRecordStart)
-          .filter(
-            (record) =>
-              record.ok &&
-              (record.mutability !== "write" ||
-                record.effect === "applied" ||
-                record.effect === "partial"),
-          )
-          .map(buildToolProgressFingerprint)
-          .filter((fingerprint) => !seenProgressFingerprints.has(fingerprint));
-        // A newly settled target is progress too: a long job going through
-        // its papers is never stopped here, even when its results repeat.
-        const settledNewTargets =
-          settledTargetCount(request.executionCheckpoint) >
-          settledAtSegmentStart;
-        if (!newFingerprints.length && !settledNewTargets) {
-          const finalText =
-            uncommittedAnswerText() ||
-            `Agent stopped after segment ${segment} produced no new successful tool result. The completed transcript was saved; narrow or redirect the request before continuing.`;
-          return await completeRun(
-            finalText,
-            "failed",
-            "segment_without_progress",
-          );
-        }
-        for (const fingerprint of newFingerprints) {
-          seenProgressFingerprints.add(fingerprint);
-        }
         // This is the durable continuation boundary. If Zotero or the model
         // process exits later, the next turn can continue from the complete
         // tool-call/result pairs checkpointed here instead of starting blind.

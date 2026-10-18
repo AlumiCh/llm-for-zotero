@@ -616,9 +616,24 @@ describe("quote card UI contract", function () {
     assert.isAbove(untrustedEnd, untrustedStart);
     assert.include(untrustedBranch, 'status: "unresolved"');
     assert.include(untrustedBranch, "interactive: true");
-    assert.include(
-      renderSource,
-      "Source match incomplete; click to search the paper.",
+    assert.notInclude(untrustedBranch, "quoteCitationId");
+    const tooltipStart = renderSource.indexOf(
+      "function unresolvedQuoteCardTooltip",
+    );
+    const tooltipFn = renderSource.slice(
+      tooltipStart,
+      renderSource.indexOf("function createQuoteCardElement", tooltipStart),
+    );
+    assert.isAtLeast(tooltipStart, 0);
+    // Only a card with a minted record (quoteCitationId) claims a match.
+    assert.match(
+      tooltipFn,
+      /if \(params\.quoteCitationId\) \{[\s\S]*Found in the paper; click to locate it in the PDF\.[\s\S]*Found in the paper\.[\s\S]*\}[\s\S]*Source match incomplete; click to search the paper\.[\s\S]*Source match incomplete\./,
+    );
+    assert.include(renderSource, "unresolvedQuoteCardTooltip(params)");
+    assert.notInclude(
+      renderSource.replace(tooltipFn, ""),
+      "Found in the paper",
     );
   });
 

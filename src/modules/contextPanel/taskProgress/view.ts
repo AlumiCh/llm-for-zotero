@@ -84,8 +84,6 @@ import {
 export const TASK_PROGRESS_WINDOW = 80;
 /** Minimum spacing of store-driven repaints: at most four a second. */
 export const TASK_PROGRESS_REPAINT_MS = 250;
-/** How long a cited quote card stays highlighted after a jump. */
-export const TASK_PROGRESS_FLASH_MS = 1400;
 /** The least height a drag leaves the drawer (less only if less fits). */
 export const TASK_PROGRESS_DRAWER_MIN_PX = 96;
 /** One arrow-key step on the drag handle; Shift makes it four. */
@@ -104,8 +102,9 @@ const SHOWN_CLASS = "llm-task-progress-shown";
 export const TASK_PROGRESS_REMOVE_PAPER_EVENT =
   "llm-task-progress-remove-paper";
 /**
- * Dispatched (bubbling) when the user asks to see a passage in its paper;
- * the detail is a `TaskPaperPassageTarget`. The panel opens the reader.
+ * Dispatched (bubbling) when the user asks to see a passage in its paper
+ * ("Source" on a read, or a citation of the paper); the detail is a
+ * `TaskPaperPassageTarget`. The panel opens the reader.
  */
 export const TASK_PROGRESS_OPEN_PASSAGE_EVENT =
   "llm-task-progress-open-passage";
@@ -122,7 +121,6 @@ const ROW_SHOWN_ATTR = "data-task-progress-row";
 const DRAWER_MAX_VAR = "--llm-task-progress-drawer-max";
 /** The drawer's current height, for the shell's absolutely placed children. */
 const DRAWER_INSET_VAR = "--llm-task-progress-inset";
-const FLASH_CLASS = "llm-task-progress-flash";
 
 /**
  * The height the user dragged the drawer to, for this session only. Not a
@@ -1234,8 +1232,6 @@ export type TaskProgressViewDeps = {
     libraryID: number;
     itemId: number;
   }) => Promise<boolean>;
-  /** Scroll the chat to a quote card; defaults to `scrollIntoView`. */
-  navigateToCitation?: (card: HTMLElement) => void;
   /** Live layout; without it (unit tests) the drawer settles at once. */
   layout?: TaskProgressLayout;
   /** A paper's "(creator, year)" label; defaults to reading it from Zotero. */
@@ -1382,7 +1378,6 @@ export function mountTaskProgressView(params: {
   let seenEpoch = 0;
   const mineruKnown = new Set<string>();
   const mineruAsked = new Set<string>();
-  const flashTimers = new Set<unknown>();
 
   const record = () =>
     input.conversationKey ? getTaskProgress(input.conversationKey) : null;
@@ -1867,7 +1862,9 @@ export function mountTaskProgressView(params: {
       libraryID: model.libraryID,
       ...detail,
     };
-    const contextItemId = model.entry?.contextItemIds?.[0];
+    // The passage's own attachment when known; else the paper's first.
+    const contextItemId =
+      detail.contextItemId || model.entry?.contextItemIds?.[0];
     if (contextItemId) target.contextItemId = contextItemId;
     from.dispatchEvent(
       new View(TASK_PROGRESS_OPEN_PASSAGE_EVENT, {
@@ -1892,6 +1889,7 @@ export function mountTaskProgressView(params: {
     link.addEventListener("click", (event: Event) => {
       event.preventDefault?.();
       event.stopPropagation?.();
+      if (link.disabled) return;
       dispatchOpenPassage(link, model, {
         rawSnippet: "",
         cleanedSnippet: "",
@@ -1909,7 +1907,14 @@ export function mountTaskProgressView(params: {
       .map(Number)
       .filter((turn) => Number.isFinite(turn))
       .sort((a, b) => a - b);
-    const citations: Array<{ id: string; quote: string; turn: number }> = [];
+    const citations: Array<{
+      id: string;
+      shown: string;
+      quote: string;
+      label: string;
+      pageLabel: string;
+      contextItemId?: number;
+    }> = [];
     const documentSections: string[] = [];
     const readsByTurn = new Map(
       turns.map((turn) => [turn, visibleReads(model.entry!.turns[turn].reads)]),
@@ -2028,8 +2033,13 @@ export function mountTaskProgressView(params: {
         }
         citations.push({
           id: citation.citationId,
-          quote: citation.quote || citation.label || citation.citationId,
-          turn,
+          shown: citation.quote || citation.label || citation.citationId,
+          quote: citation.quote || "",
+          label: citation.label || "",
+          pageLabel: citation.pageLabel || "",
+          ...(citation.contextItemId
+            ? { contextItemId: citation.contextItemId }
+            : {}),
         });
       }
     }
@@ -2072,14 +2082,27 @@ export function mountTaskProgressView(params: {
           doc,
           "button",
           "llm-task-paper-citation",
-          `↳ “${citation.quote}”`,
+          `↳ “${citation.shown}”`,
         );
         link.type = "button";
         link.dataset.citationId = citation.id;
+        link.title = t("Open this passage in the paper");
+        // The quote opens in its paper, as "Source" does for a read; a
+        // citation recorded without its quote opens the paper.
         link.addEventListener("click", (event: Event) => {
           event.preventDefault?.();
           event.stopPropagation?.();
-          jumpToCitation(citation.id);
+          if (link.disabled) return;
+          dispatchOpenPassage(link, model, {
+            rawSnippet: citation.quote,
+            cleanedSnippet: citation.quote,
+            label: citation.label,
+            ...(citation.pageLabel ? { pageLabel: citation.pageLabel } : {}),
+            ...(citation.contextItemId
+              ? { contextItemId: citation.contextItemId }
+              : {}),
+            granularity: citation.quote ? "passage" : "full",
+          });
         });
         citedIn.append(link);
       }
@@ -2691,25 +2714,6 @@ export function mountTaskProgressView(params: {
     if (!next && options?.focusRow) row.focus?.({ preventScroll: true });
   };
 
-  function jumpToCitation(citationId: string) {
-    setOpen(false);
-    const cards = Array.from(
-      chatBox.querySelectorAll(".llm-quote-citation-anchor"),
-    ) as HTMLElement[];
-    const card = cards
-      .filter((node) => node?.dataset?.quoteCitationId === citationId)
-      .pop();
-    if (!card) return;
-    if (deps.navigateToCitation) deps.navigateToCitation(card);
-    else card.scrollIntoView?.({ block: "center" });
-    card.classList.add(FLASH_CLASS);
-    const timer = deps.setTimeout(() => {
-      flashTimers.delete(timer);
-      card.classList.remove(FLASH_CLASS);
-    }, TASK_PROGRESS_FLASH_MS);
-    flashTimers.add(timer);
-  }
-
   const onRowClick = (event: Event) => {
     event.preventDefault?.();
     setOpen(!open);
@@ -2811,8 +2815,6 @@ export function mountTaskProgressView(params: {
         }
       };
       if (paintTimer !== null) clearing(() => deps.clearTimeout(paintTimer));
-      for (const timer of flashTimers) clearing(() => deps.clearTimeout(timer));
-      flashTimers.clear();
       endDrag();
       clearing(clearSettleTimer);
       clearing(clearCurtainTimer);

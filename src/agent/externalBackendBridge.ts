@@ -306,6 +306,8 @@ type ContextEnvelope = {
   selectedTexts: Array<{
     source: string;
     text: string;
+    /** The user's question attached to this selected text, when any. */
+    userQuery?: string;
     locator?: string;
     localContext?: string;
     noteContext?: {
@@ -1627,6 +1629,9 @@ function buildContextEnvelope(request: AgentRuntimeRequest): ContextEnvelope {
     .map((text, index) => ({
       source: selectedTextContexts[index]?.source || "unknown",
       text: trimText(text, 280),
+      ...(selectedTextContexts[index]?.userQuery
+        ? { userQuery: selectedTextContexts[index].userQuery }
+        : {}),
       locator:
         formatSelectedTextLocator(
           selectedTextContexts[index],

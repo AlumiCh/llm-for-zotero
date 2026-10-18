@@ -96,10 +96,14 @@ describe("paragraph evidence citations", function () {
       normalizeParagraphCitations("No source. [[cite:bad]]", new Set()),
       "No source. ",
     );
+    assert.equal(
+      normalizeParagraphCitations("x [[cite:bad id]]", new Set([a.id])),
+      "x ",
+    );
   });
   it("keeps paragraph citation ids that contain '.' or ':'", function () {
     assert.deepEqual(
-      [...paragraphCitationIds("A claim. [[cite:x.y, p:1]] [[cite:bad id]]")],
+      [...paragraphCitationIds("A claim. [[cite:x.y, p:1]] [[cite:bad?]]")],
       ["x.y", "p:1"],
     );
     assert.equal(
@@ -109,5 +113,69 @@ describe("paragraph evidence citations", function () {
       ),
       "A claim. [[cite:p:1]]",
     );
+  });
+
+  it("keeps every id of a semicolon- or space-separated citation list", function () {
+    // Live failure: [[cite:A;B]] was read as one malformed id, so both valid
+    // passages vanished from the paragraph footer.
+    for (const separator of [";", "; ", " ", ",;"]) {
+      const markdown = `Drift is slow. [[cite:${a.id}${separator}${b.id}]]`;
+      assert.deepEqual(
+        [...paragraphCitationIds(markdown)],
+        [a.id, b.id],
+        separator,
+      );
+      const plan = buildQuoteRenderPlan({
+        markdown,
+        quoteCitations: [a, b],
+      });
+      assert.deepEqual(
+        plan.paragraphCitations[0]?.map((citation) => citation.id),
+        [a.id, b.id],
+        separator,
+      );
+      assert.equal(
+        normalizeParagraphCitations(markdown, new Set([a.id, b.id])),
+        `Drift is slow. [[cite:${a.id},${b.id}]]`,
+        separator,
+      );
+    }
+    const finalized = finalizeAssistantQuoteCitations({
+      markdown: `This protocol spans multiple sessions. [[cite:${a.id};${b.id}]]`,
+      quoteCitations: [a, b],
+    });
+    assert.deepEqual(
+      finalized.quoteCitations.map((citation) => citation.id),
+      [a.id, b.id],
+    );
+  });
+
+  it("records removed unknown citation ids instead of dropping them silently", function () {
+    const plan = buildQuoteRenderPlan({
+      markdown: `A claim. [[cite:${a.id},Q_20_dummy]]\n\nAnother. [[cite:bad?]]`,
+      quoteCitations: [a],
+    });
+    assert.deepEqual(
+      plan.paragraphCitations.map((group) => group.map((c) => c.id)),
+      [[a.id]],
+    );
+    assert.notInclude(plan.displayMarkdown, "Q_20_dummy");
+    assert.notInclude(plan.displayMarkdown, "bad?");
+    assert.deepEqual(
+      plan.diagnostics
+        .filter((entry) => entry.kind === "unresolved-anchor")
+        .map((entry) => entry.quoteCitationId),
+      ["Q_20_dummy", "bad?"],
+    );
+    const dropped: string[] = [];
+    assert.equal(
+      normalizeParagraphCitations(
+        `A claim. [[cite:${a.id};Q_20_dummy]]`,
+        new Set([a.id]),
+        (ids) => dropped.push(...ids),
+      ),
+      `A claim. [[cite:${a.id}]]`,
+    );
+    assert.deepEqual(dropped, ["Q_20_dummy"]);
   });
 });

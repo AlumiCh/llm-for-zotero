@@ -2542,6 +2542,8 @@ describe("AgentRuntime", function () {
         let modelSteps = 0;
         let continuationMessages: AgentModelMessage[] = [];
         const runtime = new AgentRuntime({
+          // The retry waits are the policy's; this test only needs its order.
+          modelRetryBackoffMs: [0, 0],
           registry: new AgentToolRegistry(),
           adapterFactory: () => ({
             getCapabilities: () => ({
@@ -2862,11 +2864,12 @@ describe("AgentRuntime", function () {
     }
   });
 
-  it("bounds stream recovery to one retry instead of an endless interrupted Plan", async function () {
+  it("bounds stream recovery to the retry policy instead of an endless interrupted Plan", async function () {
     const restoreDb = installMockDb();
     try {
       let calls = 0;
       const runtime = new AgentRuntime({
+        modelRetryBackoffMs: [0, 0],
         registry: new AgentToolRegistry(),
         adapterFactory: () => ({
           getCapabilities: () => ({
@@ -2893,7 +2896,8 @@ describe("AgentRuntime", function () {
           userText: "finish this task",
         },
       });
-      assert.equal(calls, 2);
+      // One step and its two retries (turnBoundary.ts, Rule 4).
+      assert.equal(calls, 3);
       assert.equal(outcome.kind, "completed");
       if (outcome.kind === "completed") assert.include(outcome.text, "stream");
       assert.equal([...restoreDb.runs.values()][0]?.status, "failed");

@@ -6,7 +6,7 @@ import {
   setOriginalAgentPermissionMode,
 } from "../src/agent/originalAgentPermissionMode";
 import type { AgentEvent, AgentRuntimeRequestInput } from "../src/agent/types";
-import type { LiveAgentCredentials } from "../test-live-agent/liveAgentCredentials";
+import type { LiveAgentCredentials } from "../test-live/agent/liveAgentCredentials";
 import {
   assertExact,
   check,

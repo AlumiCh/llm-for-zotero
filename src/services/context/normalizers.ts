@@ -15,6 +15,33 @@ function normalizeText(value: unknown, sanitize?: TextSanitizer): string {
   return (sanitize ? sanitize(raw) : raw).trim();
 }
 
+/** Longest question a selected-text chip keeps (D1). */
+export const SELECTED_TEXT_USER_QUERY_MAX_LENGTH = 2000;
+
+/**
+ * Normalizes a chip's question: sanitized, runs of spaces and tabs collapsed
+ * to one space, each line trimmed, three or more newlines collapsed to two,
+ * trimmed, and capped. Line breaks stay. Returns "" when nothing is left, so
+ * callers omit the field.
+ */
+export function normalizeSelectedTextUserQuery(
+  value: unknown,
+  sanitize?: TextSanitizer,
+): string {
+  if (typeof value !== "string") return "";
+  const sanitized = sanitize ? sanitize(value) : value;
+  return sanitized
+    .replace(/\r\n?/g, "\n")
+    .replace(/[^\S\n]+/g, " ")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, SELECTED_TEXT_USER_QUERY_MAX_LENGTH)
+    .trim();
+}
+
 function normalizeLibraryItemKey(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toUpperCase();
@@ -128,6 +155,7 @@ export function normalizeSelectedTextContexts(
         ? Math.floor(rawPageIndex)
         : undefined;
     const rawPageLabel = normalizeText(typed.pageLabel, sanitize);
+    const userQuery = normalizeSelectedTextUserQuery(typed.userQuery, sanitize);
     out.push({
       text,
       source,
@@ -137,6 +165,8 @@ export function normalizeSelectedTextContexts(
       pageIndex,
       // Only a stored label; none is guessed from the page index.
       pageLabel: rawPageLabel || undefined,
+      // Absent, not undefined, when empty (D1).
+      ...(userQuery ? { userQuery } : {}),
     });
   }
   return out;

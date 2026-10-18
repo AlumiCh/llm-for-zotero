@@ -21,6 +21,12 @@ export type TaskPaperPassageTarget = {
   cleanedSnippet: string;
   /** For display; a page is found by it only when `pageIndex` is absent. */
   label: string;
+  /**
+   * The printed page the passage names when `label` does not (a citation's
+   * recorded page): a bare label such as "7" or "iv". Used as a page named
+   * by `label` is, only when `pageIndex` is absent.
+   */
+  pageLabel?: string;
   /** The page index the read came from, when the ledger recorded one. */
   pageIndex?: number;
   granularity: TaskPaperReadGranularity;
@@ -36,6 +42,18 @@ const ELLIPSIS_AT_START = /^\s*(?:\.{2,}|…)/u;
 export function taskPaperPassagePageLabel(label: string | undefined): string {
   const match = /^\s*pp?\.\s*([^\s,;–—-]+)/iu.exec(label || "");
   return match ? match[1] : "";
+}
+
+/**
+ * The printed page a target falls back to: the one it names outright, else
+ * the one its label names. Empty when neither names a page.
+ */
+export function taskPaperPassageTargetPageLabel(
+  target: Pick<TaskPaperPassageTarget, "label" | "pageLabel">,
+): string {
+  return (
+    (target.pageLabel || "").trim() || taskPaperPassagePageLabel(target.label)
+  );
 }
 
 /**

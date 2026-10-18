@@ -578,10 +578,11 @@ export function buildAgentResourceContextPlan(
 }
 
 function buildScopeIdentityLines(request: AgentRuntimeRequest): string[] {
-  const lines = [
-    "Current Zotero context summary:",
-    `- Conversation key: ${request.conversationKey}`,
-  ];
+  // No conversation key here: this block sits in the system prompt, so a
+  // per-conversation value would make the prompt differ for every new chat
+  // and defeat provider prefix caching. Tools read the key from the request,
+  // never from the model.
+  const lines = ["Current Zotero context summary:"];
   if (request.activeItemId) {
     lines.push(`- Active item ID: ${request.activeItemId}`);
   }

@@ -256,6 +256,11 @@ const BUILTIN_BOOTSTRAP_RAW_HASHES: Partial<
     "14eowou",
     "1l2klni",
     "37vjex",
+    // v12, the text v13's lookup-first route and absence distinction
+    // replace, as shipped and as the canonical copy carrying its native
+    // `name:` line.
+    "mlbz5s",
+    "1psjdpv",
   ],
   "write-note.md": [
     "172xn8t",
@@ -342,6 +347,8 @@ const BUILTIN_BOOTSTRAP_BODY_HASHES: Partial<
     "13yvvl6",
     "1l4p1x2",
     "u49rr3",
+    // v12, the body v13's lookup-first route replaces.
+    "7fiyr0",
   ],
 };
 

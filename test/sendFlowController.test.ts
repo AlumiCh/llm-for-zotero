@@ -27,7 +27,10 @@ import { createSendFlowController } from "../src/modules/contextPanel/setupHandl
 import { FULL_PDF_UNSUPPORTED_MESSAGE } from "../src/modules/contextPanel/pdfSupportMessages";
 import { setUserSkills, type AgentSkill } from "../src/agent/skills";
 import type { LocalDocumentResource } from "../src/shared/types";
-import { resolvePromptText as resolveProductionPromptText } from "../src/modules/contextPanel/textUtils";
+import {
+  buildQuestionWithSelectedTextContexts as buildProductionQuestionWithSelectedTextContexts,
+  resolvePromptText as resolveProductionPromptText,
+} from "../src/modules/contextPanel/textUtils";
 import { createPaperPortalItem } from "../src/modules/contextPanel/portalScope";
 import { buildTurnPaperScope } from "../src/agent/context/turnPaperScope";
 import {
@@ -1216,6 +1219,40 @@ describe("sendFlowController", function () {
     assert.deepEqual(sentOptions.resolvedSelectedTextAnchors, [anchor]);
   });
 
+  it("sends the chip question, not the default prompt, when the composer is empty", async function () {
+    const context: SelectedTextContext = {
+      text: "A quoted sentence.",
+      source: "model",
+      userQuery: "What does this imply?",
+    };
+    const { controller, inputBox, getLastSend } = createBaseDeps({
+      getSelectedTextContextEntries: () => [context],
+      getSelectedPaperContexts: () => [],
+      getSelectedCollectionContexts: () => [],
+      getFullTextPaperContexts: () => [],
+      getSelectedFiles: () => [],
+      getSelectedImages: () => [],
+      resolvePromptText: resolveProductionPromptText,
+      buildQuestionWithSelectedTextContexts:
+        buildProductionQuestionWithSelectedTextContexts,
+      buildModelPromptWithFileContext: (question: string) => question,
+    });
+    inputBox.value = "";
+
+    await controller.doSend();
+
+    const { lastSentQuestion, lastSentDisplayQuestion } = getLastSend();
+    assert.include(
+      lastSentQuestion,
+      '"""\nA quoted sentence.\n"""\nQuestion about this text:\nWhat does this imply?',
+    );
+    // The question follows its quote once; it is not repeated at the end.
+    assert.notInclude(lastSentQuestion, "User question:");
+    assert.equal(lastSentQuestion.split("What does this imply?").length - 1, 1);
+    assert.notInclude(lastSentQuestion, "Please explain this selected text.");
+    assert.equal(lastSentDisplayQuestion, "What does this imply?");
+  });
+
   it("passes input mode to the screenshot gate and omits images for text-only mode", async function () {
     let screenshotGateArgs:
       | {
@@ -1412,6 +1449,130 @@ describe("sendFlowController", function () {
     assert.equal(getCounts().persistDraftInputCalls, 0);
     assert.equal(getCounts().composerDraftClearedCalls, 0);
     assert.equal(restoreCalls, 0);
+  });
+
+  it("restores a preserved-draft send refused before dispatch", async function () {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["no item", { getItem: () => null }],
+      ["ownership refused", { requireCurrentOwnership: () => false }],
+    ];
+    for (const [label, overrides] of cases) {
+      let restoreCalls = 0;
+      const { controller, inputBox, getCounts } = createBaseDeps(overrides);
+      inputBox.value = "draft";
+      await controller.doSend({
+        overrideText: "queued follow-up",
+        preserveInputDraft: true,
+        restoreQueuedInput: () => {
+          restoreCalls += 1;
+        },
+      });
+      assert.equal(restoreCalls, 1, label);
+      assert.equal(inputBox.value, "draft", label);
+      assert.equal(getCounts().sendCalled, 0, label);
+    }
+  });
+
+  it("queues a busy preserved-draft send without touching the composer", async function () {
+    const queued: Array<{ text: string; options: unknown }> = [];
+    let restoreCalls = 0;
+    const { controller, inputBox, getCounts } = createBaseDeps({
+      beginRequest: () => null,
+      queueFollowUpInput: (text: string, options: unknown) => {
+        queued.push({ text, options });
+        return true;
+      },
+    });
+    inputBox.value = "draft typed while waiting";
+
+    await controller.doSend({
+      overrideText: "queued follow-up",
+      preserveInputDraft: true,
+      restoreQueuedInput: () => {
+        restoreCalls += 1;
+      },
+    });
+
+    assert.deepEqual(queued, [
+      { text: "queued follow-up", options: { preserveInputDraft: true } },
+    ]);
+    assert.equal(inputBox.value, "draft typed while waiting");
+    assert.equal(getCounts().persistDraftInputCalls, 0);
+    assert.equal(restoreCalls, 0);
+    assert.equal(getCounts().sendCalled, 0);
+  });
+
+  it("restores a busy preserved-draft send that the queue refused", async function () {
+    let restoreCalls = 0;
+    const { controller, inputBox } = createBaseDeps({
+      beginRequest: () => null,
+      // No queue thread key: the queue drops the text and reports false.
+      queueFollowUpInput: () => false,
+    });
+    inputBox.value = "draft";
+
+    await controller.doSend({
+      overrideText: "queued follow-up",
+      preserveInputDraft: true,
+      restoreQueuedInput: () => {
+        restoreCalls += 1;
+      },
+    });
+
+    assert.equal(restoreCalls, 1);
+    assert.equal(inputBox.value, "draft");
+  });
+
+  it("queues a busy composer send with the default clearing behavior", async function () {
+    const queued: Array<{ text: string; options: unknown }> = [];
+    const { controller } = createBaseDeps({
+      beginRequest: () => null,
+      queueFollowUpInput: (text: string, options: unknown) => {
+        queued.push({ text, options });
+        return true;
+      },
+    });
+
+    await controller.doSend();
+
+    assert.deepEqual(queued, [
+      { text: "ask question", options: { preserveInputDraft: false } },
+    ]);
+  });
+
+  it("sends a preserved-draft prompt as a new turn even while an edit is open", async function () {
+    const { controller, getCounts, getLastSend } = createBaseDeps({
+      getSelectedTextContextEntries: () => [],
+      getSelectedPaperContexts: () => [],
+      getSelectedCollectionContexts: () => [],
+      getFullTextPaperContexts: () => [],
+      getSelectedFiles: () => [],
+      getSelectedImages: () => [],
+      resolvePromptText: resolveProductionPromptText,
+      buildModelPromptWithFileContext: (question: string) => question,
+      getActiveEditSession: () => ({
+        conversationKey: item.id,
+        userTimestamp: 10,
+        assistantTimestamp: 20,
+      }),
+      getLatestEditablePair: async () => ({
+        conversationKey: item.id,
+        pair: {
+          userMessage: { timestamp: 10 },
+          assistantMessage: { timestamp: 20, streaming: false },
+        },
+      }),
+    });
+
+    await controller.doSend({
+      overrideText: "queued follow-up",
+      preserveInputDraft: true,
+      restoreQueuedInput: () => undefined,
+    });
+
+    assert.equal(getCounts().editCalled, 0);
+    assert.equal(getCounts().sendCalled, 1);
+    assert.equal(getLastSend().lastSentQuestion, "queued follow-up");
   });
 
   it("uses retain-pinned callbacks for edit-latest flow", async function () {

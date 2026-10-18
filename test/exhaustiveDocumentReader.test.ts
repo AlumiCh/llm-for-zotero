@@ -366,6 +366,38 @@ describe("exhaustiveDocumentReader", function () {
     );
   });
 
+  it("retries a digest that ran out of output room with a larger budget", async function () {
+    // Retrying a truncated digest at the same budget truncates it again: on
+    // Haiku 5.5 every paper_read full call failed this way.
+    const budgets: number[] = [];
+    const analyzeBatch = createLlmBatchAnalyzer(
+      { model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1" },
+      (async (params: { outputTokenLimit?: { tokens?: number } }) => {
+        budgets.push(params.outputTokenLimit?.tokens ?? 0);
+        return budgets.length === 1
+          ? {
+              text: '{"digest":"Cut',
+              completion: { status: "incomplete", reason: "output_limit" },
+            }
+          : {
+              text: '{"digest":"Covered","relevantChunkIds":[]}',
+              completion: { status: "complete" },
+            };
+      }) as never,
+    );
+    const result = await readDocumentsExhaustively({
+      papers: [buildPaper()],
+      question: "Read everything.",
+      batchTokenBudget: 4000,
+      finalTokenBudget: 4000,
+      retryCount: 1,
+      analyzeBatch,
+    });
+
+    assert.equal(result.status, "complete");
+    assert.deepEqual(budgets, [700, 1400]);
+  });
+
   it("reports unreadable papers independently in a multi-paper receipt", async function () {
     const readable = buildPaper();
     const unreadable = {

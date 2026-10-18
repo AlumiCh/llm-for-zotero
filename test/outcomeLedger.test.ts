@@ -1704,7 +1704,6 @@ describe("outcome ledger: final gate inputs", function () {
 describe("outcome ledger: run end state", function () {
   const INTERRUPTING: RunStopRule[] = [
     "interrupted_by_error",
-    "stream_interrupted_again",
     "incomplete_step_limit",
     "segment_without_progress",
     "repeated_tool_errors",
@@ -1790,7 +1789,7 @@ describe("outcome ledger: run end state", function () {
     assert.equal(
       decideRunEnd(undefined, {
         status: "failed",
-        stopRule: "stream_interrupted_again",
+        stopRule: "incomplete_step_limit",
       }),
       "failed",
     );
@@ -1801,6 +1800,35 @@ describe("outcome ledger: run end state", function () {
       }),
       "failed",
       "not an interrupting rule",
+    );
+  });
+
+  it("a resumable incident ends interrupted with or without outcome evidence", function () {
+    for (const stopRule of [
+      "budget_reached",
+      "connection_lost",
+      "prompt_budget_exceeded",
+    ] as RunStopRule[]) {
+      assert.equal(
+        decideRunEnd(undefined, { status: "failed", stopRule }),
+        "interrupted",
+        stopRule,
+      );
+      assert.equal(
+        decideRunEnd(ledgerWith(saveNote), { status: "failed", stopRule }),
+        "interrupted",
+        stopRule,
+      );
+    }
+  });
+
+  it("an answer written after the search ran out ends completed with exceptions", function () {
+    assert.equal(
+      decideRunEnd(undefined, {
+        status: "completed",
+        stopRule: "search_exhausted",
+      }),
+      "completed_with_exceptions",
     );
   });
 

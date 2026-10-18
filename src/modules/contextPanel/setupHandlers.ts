@@ -215,10 +215,13 @@ import {
   getPanelHostBinding,
   isPanelHostCompatibleWithPaper,
   isPanelOperationLeaseCurrent,
+  renderPanelOwnershipBlocked,
   requireCurrentPanelOwnership,
   resolveSelectionSurfaceForBody,
   shouldOwnershipFenceSwallowEvent,
 } from "./panelHostOwnership";
+import { clearCompletedPanelLifecycleSignature } from "./panelLifecycleSignature";
+import { runInPlacePaperSwitch } from "./inPlacePaperSwitch";
 import {
   publishPanelHandle,
   unpublishPanelHandle,
@@ -481,7 +484,10 @@ import {
   type SendFlowOptions,
 } from "./setupHandlers/controllers/sendFlowController";
 import { cancelVisiblePendingConfirmationCards } from "./setupHandlers/controllers/cancelPendingConfirmationController";
-import { buildInlineEditRetryContextSnapshot } from "./setupHandlers/controllers/inlineEditRetryController";
+import {
+  buildInlineEditRetryContextSnapshot,
+  resolveInlineEditSubmitText,
+} from "./setupHandlers/controllers/inlineEditRetryController";
 import {
   endInlineEdit,
   getInlineEditTarget,
@@ -907,7 +913,10 @@ export function setupHandlers(
   let renderQueuedFollowUpInputs: () => void = () => {};
   let scheduleQueuedFollowUpDrain: () => void = () => {};
   let isQueuedFollowUpSendAvailable: () => boolean = () => false;
-  let queueFollowUpInput: (text: string) => void = () => {};
+  let queueFollowUpInput: (
+    text: string,
+    options?: { preserveInputDraft?: boolean },
+  ) => boolean = () => false;
 
   let quotaControl: ReturnType<typeof attachFooterQuotaControl> | null = null;
   let quotaPendingConversationKey: number | null = null;
@@ -1030,6 +1039,7 @@ export function setupHandlers(
   let codexModelCatalogModels: CodexAppServerModelCatalogEntry[] = [];
   let codexModelCatalogInFlight: Promise<void> | null = null;
   let codexModelCatalogPath = "";
+  let codexModelCatalogRequestId = 0;
   const resolveClaudeModelCatalogContext = ():
     | ClaudeModelCatalogRequestContext
     | undefined => {
@@ -1205,37 +1215,44 @@ export function setupHandlers(
     }
     positionFloatingMenu(body, modelMenu, modelBtn);
   };
-  const ensureCodexModelCatalogLoaded = (): Promise<void> => {
+  const ensureCodexModelCatalogLoaded = (force = false): Promise<void> => {
     if (!isCodexConversationSystem()) return Promise.resolve();
     const codexPath = getConfiguredCodexAppServerBinaryPath();
-    if (
-      codexModelCatalogStatus === "ready" &&
-      codexPath === codexModelCatalogPath
-    ) {
+    const pathChanged = codexPath !== codexModelCatalogPath;
+    if (!force && codexModelCatalogStatus === "ready" && !pathChanged) {
       return Promise.resolve();
     }
-    if (codexModelCatalogInFlight) return codexModelCatalogInFlight;
+    if (codexModelCatalogInFlight && !pathChanged)
+      return codexModelCatalogInFlight;
+    if (pathChanged) codexModelCatalogModels = [];
+    const requestId = ++codexModelCatalogRequestId;
+    const isCurrentRequest = () =>
+      !setupHandlersCleaned &&
+      requestId === codexModelCatalogRequestId &&
+      codexPath === getConfiguredCodexAppServerBinaryPath();
     codexModelCatalogStatus = "loading";
     codexModelCatalogError = "";
     codexModelCatalogPath = codexPath;
     refreshOpenCodexModelMenu();
     codexModelCatalogInFlight = loadCodexAppServerModelCatalog({ codexPath })
       .then((catalog) => {
+        if (!isCurrentRequest()) return;
         codexModelCatalogModels = catalog.models;
         codexModelCatalogStatus = "ready";
         codexModelCatalogError = "";
         reconcileSelectedCodexReasoningMode();
       })
       .catch((error: unknown) => {
-        codexModelCatalogModels = [];
+        if (!isCurrentRequest()) return;
         codexModelCatalogStatus = "error";
         codexModelCatalogError =
           error instanceof Error ? error.message : String(error);
         appLogger.warn("Codex app-server: failed to load model catalog", error);
       })
       .finally(() => {
+        if (requestId !== codexModelCatalogRequestId) return;
         codexModelCatalogInFlight = null;
-        refreshOpenCodexModelMenu();
+        if (!setupHandlersCleaned) refreshOpenCodexModelMenu();
       });
     return codexModelCatalogInFlight;
   };
@@ -2802,7 +2819,7 @@ export function setupHandlers(
   let autoLoadedContextPanelItemKey: string | null = null;
   let autoLoadedContextSourceSnapshotIsExplicit = false;
   let autoLoadedPaperContextGeneration = 0;
-  let autoLoadedPaperContextPromise: Promise<PaperContextRef | null> | null =
+  let autoLoadedContextSourcePromise: Promise<ResolvedContextSource | null> | null =
     null;
   let requestAutoLoadedPaperContextRefresh: (() => void) | null = null;
 
@@ -2867,7 +2884,7 @@ export function setupHandlers(
     autoLoadedPaperContextContentSourceMode = null;
     autoLoadedContextPanelItemKey = null;
     autoLoadedContextSourceSnapshotIsExplicit = false;
-    autoLoadedPaperContextPromise = null;
+    autoLoadedContextSourcePromise = null;
     panelRoot.dataset.contextItemId = "";
   };
 
@@ -2972,14 +2989,11 @@ export function setupHandlers(
     return resolveAutoLoadedContextSourceSync()?.paperContext || null;
   };
 
+  // Resolves to this call's own resolution. The shared snapshot can be
+  // cleared or replaced while it awaits (the panel moving to another paper),
+  // so a send must not read the snapshot back after the await.
   const resolveAutoLoadedContextSourceAsync =
     async (): Promise<ResolvedContextSource | null> => {
-      await resolveAutoLoadedPaperContextAsync();
-      return autoLoadedContextSourceSnapshot ?? null;
-    };
-
-  const resolveAutoLoadedPaperContextAsync =
-    async (): Promise<PaperContextRef | null> => {
       if (!item) return null;
       if (isGlobalMode()) {
         panelRoot.dataset.contextItemId = "";
@@ -2988,31 +3002,38 @@ export function setupHandlers(
       if (autoLoadedContextSourceSnapshot !== undefined) {
         if (isAutoLoadedContextSnapshotCurrent()) {
           writeAutoLoadedContextItemId(autoLoadedContextSourceSnapshot);
-          return autoLoadedContextSourceSnapshot?.paperContext || null;
+          return autoLoadedContextSourceSnapshot;
         }
         clearAutoLoadedContextSnapshot();
       }
-      if (autoLoadedPaperContextPromise) return autoLoadedPaperContextPromise;
+      if (autoLoadedContextSourcePromise) return autoLoadedContextSourcePromise;
       const requestGeneration = autoLoadedPaperContextGeneration;
-      autoLoadedPaperContextPromise = (async () => {
+      const pending = (async () => {
         const panelItem = resolveAutoLoadedContextPanelItem();
         if (!panelItem) return null;
         const contextSource = await resolveContextSourceItemAsync(panelItem);
-        const paperContext = contextSource.paperContext || null;
         if (
           panelRoot.dataset.handlersAttached === thisGen &&
           requestGeneration === autoLoadedPaperContextGeneration
         ) {
           setAutoLoadedContextSnapshot(contextSource, panelItem);
         }
-        return paperContext;
+        return contextSource;
       })();
+      autoLoadedContextSourcePromise = pending;
       try {
-        return await autoLoadedPaperContextPromise;
+        return await pending;
       } finally {
-        autoLoadedPaperContextPromise = null;
+        // A newer resolution may own the slot by now; leave it in place.
+        if (autoLoadedContextSourcePromise === pending) {
+          autoLoadedContextSourcePromise = null;
+        }
       }
     };
+
+  const resolveAutoLoadedPaperContextAsync =
+    async (): Promise<PaperContextRef | null> =>
+      (await resolveAutoLoadedContextSourceAsync())?.paperContext || null;
 
   const refreshAutoLoadedPaperContextForCurrentItem = () => {
     clearAutoLoadedContextSnapshot();
@@ -4758,13 +4779,14 @@ export function setupHandlers(
   body.addEventListener(TASK_PROGRESS_REMOVE_PAPER_EVENT, (event: Event) => {
     void removeTaskProgressPaper(event);
   });
-  // "Source" on a passage the card lists: open its paper at the passage.
+  // "Source" on a passage the card lists, or a citation under its paper:
+  // open the paper at the passage.
   body.addEventListener(TASK_PROGRESS_OPEN_PASSAGE_EVENT, (event: Event) => {
     const target = (event as CustomEvent<TaskPaperPassageTarget>).detail;
     if (!target || !(Number(target.itemId) > 0)) return;
     const button =
       (event.target as Element | null)?.closest?.<HTMLButtonElement>(
-        "button.llm-task-paper-open",
+        "button.llm-task-paper-open, button.llm-task-paper-citation",
       ) || null;
     void navigateToTaskPaperPassage({ body, target, button }).catch(
       (error: unknown) => {
@@ -4858,7 +4880,11 @@ export function setupHandlers(
       unsubscribeBatch();
     };
   })();
+  // Counts chat draws, so an in-place paper switch can tell that another
+  // conversation was drawn while it was loading.
+  let chatDrawCount = 0;
   const refreshChatPreservingScroll = () => {
+    chatDrawCount += 1;
     if (!item) {
       runWithChatScrollGuard(() => {
         refreshChat(body, item);
@@ -5296,10 +5322,12 @@ export function setupHandlers(
       menu,
       status: codexModelCatalogStatus,
       modelCount: codexModelCatalogModels.length,
-      loadingMessage: t("Loading Codex models…"),
-      errorMessage: t(
-        "Could not load Codex models. Showing current model only.",
-      ),
+      loadingMessage: codexModelCatalogModels.length
+        ? t("Refreshing Codex models…")
+        : t("Loading Codex models…"),
+      errorMessage: codexModelCatalogModels.length
+        ? t("Could not refresh Codex models. Showing the last known list.")
+        : t("Could not load Codex models. Showing current model only."),
       errorTitle: codexModelCatalogError,
       emptyMessage: t("Codex did not return any available models."),
       retryLabel: t("Retry loading Codex models"),
@@ -5307,9 +5335,7 @@ export function setupHandlers(
         if (!isPrimaryPointerEvent(event)) return;
         event.preventDefault();
         event.stopPropagation();
-        codexModelCatalogStatus = "idle";
-        codexModelCatalogError = "";
-        void ensureCodexModelCatalogLoaded();
+        void ensureCodexModelCatalogLoaded(true);
       },
     });
   };
@@ -6489,6 +6515,9 @@ export function setupHandlers(
     setReasoningSelection: panelChoices.setCodexDirectReasoningSelection,
   });
 
+  let setupHandlersCleaned = false;
+  // Latest in-place paper switch; only it may re-enable the chat box.
+  let paperItemSwitchToken = 0;
   const panelHandle: PanelHandle = {
     refreshContextSourceForCurrentItem: () => {
       withScrollGuard(chatBox, conversationKey, () => {
@@ -6503,6 +6532,106 @@ export function setupHandlers(
       });
     },
     applyResolvedClaudeEffort: applyClaudeResolvedReasoningDisplay,
+    switchToPaperItem: (nextItem, nextBasePaperItem, rebuild) => {
+      // Only the plain paper-chat case moves in place. Notes, WebChat, the
+      // standalone window, an open inline edit, a runtime switch in flight,
+      // or a change of mode or runtime all keep the full remount.
+      if (
+        setupHandlersCleaned ||
+        isStandalonePanel ||
+        !item ||
+        !panelRoot.isConnected ||
+        panelRoot.dataset.ownershipBlocked ||
+        !isPaperMode() ||
+        isNoteSession() ||
+        isWebChatModeActive() ||
+        runtimeSystemSwitchInFlight ||
+        getInlineEditTarget(body) ||
+        resolveActiveNoteSession(nextItem) ||
+        resolveDisplayConversationKind(nextItem) !== "paper" ||
+        (resolveConversationSystemForItem(nextItem) || "upstream") !==
+          currentConversationSystem
+      ) {
+        return false;
+      }
+      const lease = capturePanelOperationLease(body);
+      if (!lease) return false;
+      persistDraftInputForCurrentConversation();
+      // The host is already bound to the next paper, so the mounted scope is
+      // written before syncConversationIdentity runs its ownership check.
+      item = nextItem;
+      basePaperItem =
+        nextBasePaperItem || resolveConversationBaseItem(nextItem);
+      const nextKey = getConversationKey(nextItem);
+      panelRoot.dataset.itemId = nextKey > 0 ? `${nextKey}` : "";
+      panelRoot.dataset.libraryId = nextItem.libraryID
+        ? `${nextItem.libraryID}`
+        : "";
+      panelRoot.dataset.conversationKind = "paper";
+      panelRoot.dataset.conversationSystem = currentConversationSystem;
+      const nextBaseId = Number(basePaperItem?.id || 0);
+      panelRoot.dataset.basePaperItemId = nextBaseId > 0 ? `${nextBaseId}` : "";
+      clearAutoLoadedContextSnapshot();
+      syncConversationIdentity();
+      // Before switchPaperConversation persists the composer as this paper's
+      // draft, the composer must hold this paper's draft, not the last one's.
+      restoreDraftInputForCurrentConversation();
+      // The composer's chips are per paper: show this paper's at once, so
+      // send and chip removal never act on chips the last paper left behind.
+      resetComposePreviewUI();
+      flushPanelStateRefreshNow();
+      syncRequestUiForCurrentConversation();
+      if (status) setStatus(status, t("Ready"), "ready");
+      // The previous paper's messages stay on screen until the next paper's
+      // chat is drawn; they must not take input meanwhile.
+      const switchToken = ++paperItemSwitchToken;
+      const chatDrawsAtSwitch = chatDrawCount;
+      chatBox?.setAttribute("inert", "");
+      void runInPlacePaperSwitch({
+        isLatest: () =>
+          switchToken === paperItemSwitchToken &&
+          !setupHandlersCleaned &&
+          body.querySelector("#llm-main") === panelRoot,
+        switchConversation: async () =>
+          (await switchPaperConversation()) === true,
+        canDrawFallback: () =>
+          item === nextItem && isPanelOperationLeaseCurrent(lease),
+        drawFallback: async () => {
+          await ensureConversationLoaded(nextItem, { body });
+          if (item !== nextItem || !isPanelOperationLeaseCurrent(lease)) {
+            return false;
+          }
+          restoreDraftInputForCurrentConversation();
+          refreshChatPreservingScroll();
+          resetComposePreviewUI();
+          return true;
+        },
+        // The user opened another conversation (history, Library chat) and
+        // it was drawn; leave it alone.
+        movedToOtherConversation: () =>
+          item !== nextItem && chatDrawCount !== chatDrawsAtSwitch,
+        // Nothing drew this paper's chat, so the last paper's messages must
+        // not stay under this paper's identity. Show the same restoring state
+        // a full rebuild starts from, then rebuild: Zotero already rendered
+        // this paper and sends no further render that would.
+        clearUndrawn: () => {
+          renderPanelOwnershipBlocked(
+            body,
+            "paper-switch-in-place",
+            "unresolved",
+          );
+          clearCompletedPanelLifecycleSignature(body);
+        },
+        rebuild,
+        release: () => {
+          chatBox?.removeAttribute("inert");
+        },
+        onError: (err) => {
+          appLogger.warn("LLM: in-place paper switch failed", err);
+        },
+      });
+      return true;
+    },
   };
   publishPanelHandle(body, panelHandle);
 
@@ -7186,11 +7315,14 @@ export function setupHandlers(
     );
   };
 
-  queueFollowUpInput = (text: string) => {
+  queueFollowUpInput = (text, options) => {
     const nextQueue = enqueueQueuedFollowUp(getQueuedFollowUpThreadKey(), text);
-    if (!nextQueue.length) return;
-    inputBox.value = "";
-    persistDraftInputForCurrentConversation();
+    if (!nextQueue.length) return false;
+    // Text that did not come from the composer must not erase its draft.
+    if (!options?.preserveInputDraft) {
+      inputBox.value = "";
+      persistDraftInputForCurrentConversation();
+    }
     renderQueuedFollowUpInputs();
     if (status) {
       setStatus(
@@ -7201,6 +7333,7 @@ export function setupHandlers(
         "ready",
       );
     }
+    return true;
   };
 
   syncRequestUiForCurrentConversation();
@@ -7220,7 +7353,7 @@ export function setupHandlers(
     beginRequest: beginPanelRequest,
     isRequestOwner,
     finishRequest: finishPanelRequest,
-    queueFollowUpInput: (text) => queueFollowUpInput(text),
+    queueFollowUpInput: (text, options) => queueFollowUpInput(text, options),
     resolveContextSource: resolveAutoLoadedContextSourceAsync,
     closeSlashMenu,
     closePaperPicker,
@@ -7378,7 +7511,17 @@ export function setupHandlers(
     if (panelEditTarget && item) {
       const currentItem = item;
       const editTarget = panelEditTarget;
-      const newText = inputBox?.value.trim() ?? "";
+      const composerText = inputBox?.value.trim() ?? "";
+      // Read the chips now: endInlineEdit strips their questions below.
+      const textContextKey = getTextContextConversationKey();
+      const selectedContexts = textContextKey
+        ? getSelectedTextContextEntries(textContextKey)
+        : [];
+      // An empty composer still edits the turn when the chips carry questions.
+      const newText = resolveInlineEditSubmitText(
+        composerText,
+        selectedContexts,
+      );
       if (!newText && isRequestPending(getConversationKey(currentItem))) return;
       const inlineRequest = newText
         ? beginPanelRequest(body, currentItem, "Preparing edited retry...")
@@ -7415,15 +7558,17 @@ export function setupHandlers(
           );
         }
         if (!providerDispatchStarted) {
-          inputBox.value = newText;
+          inputBox.value = composerText;
           persistDraftInputForCurrentConversation();
           resetComposerInputHeight();
+          // A refused chip-question edit gets its questions back: endInlineEdit
+          // stripped them, and the composer holds nothing to retry with.
+          if (!composerText && textContextKey) {
+            setSelectedTextContextEntries(textContextKey, selectedContexts);
+            updateSelectedTextPreviewPreservingScroll();
+          }
         }
       };
-      const textContextKey = getTextContextConversationKey();
-      const selectedContexts = textContextKey
-        ? getSelectedTextContextEntries(textContextKey)
-        : [];
       const {
         selectedTexts,
         selectedTextSources,
@@ -7899,6 +8044,9 @@ export function setupHandlers(
     if (ke.key === "Enter" && !ke.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
+      // A held Enter that started in an inline selection prompt lands here
+      // as auto-repeat after that box closes; it must not send the draft.
+      if (ke.repeat) return;
       void executeSend();
     }
   });
@@ -7964,7 +8112,9 @@ export function setupHandlers(
     if ((modelBtn as HTMLButtonElement).disabled) return;
     menus.closeMany(MENUS_CLOSED_BY_MODEL_MENU);
     if (isCodexConversationSystem()) {
-      void ensureCodexModelCatalogLoaded();
+      // A loaded catalog can change while this chat stays mounted. Revalidate
+      // on each user opening and update the menu when model/list returns.
+      void ensureCodexModelCatalogLoaded(true);
     } else if (isClaudeConversationSystem()) {
       // Force: the catalog cache identity (bridge URL, prefs, profile-dir
       // hash, scope) cannot see in-place ~/.claude/settings.json profile
@@ -8269,7 +8419,6 @@ export function setupHandlers(
   }
 
   let disconnectObserverCleanup: (() => void) | null = null;
-  let setupHandlersCleaned = false;
   const cleanupSetupHandlers = () => {
     if (setupHandlersCleaned) return;
     setupHandlersCleaned = true;

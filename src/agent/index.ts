@@ -236,8 +236,19 @@ export function getAgentApi() {
      * "continue"). Without it the turn runs to its own end, as before.
      *
      * Resolves to a completed or fallback outcome. A stopped turn rejects
-     * with what the stopped run threw, or `Error("Aborted")`; a failed turn
-     * rejects with the error that failed it.
+     * with what the stopped run threw, or `Error("Aborted")`; a turn that an
+     * error escaped (a provider error the runtime does not retry, such as a
+     * 401 or a 400) rejects with that error.
+     *
+     * A turn the runtime ended by one of its own stop rules resolves with
+     * the stop text as `text`, not a verdict: `runStatus: "failed"` marks
+     * `connection_lost` (a network, rate-limit or 5xx error after its
+     * retries), `budget_reached` (a per-turn safety limit),
+     * `prompt_budget_exceeded`, and the failure rules such as
+     * `repeated_tool_errors` or `segment_without_progress`;
+     * `search_exhausted` resolves with `runStatus` unset and an answer that
+     * says what was not confirmed. The rule is the `agent_run_stop`
+     * provider event the turn emits (`payload.rule`), also in its trace.
      */
     runTurn: async (
       request: AgentRuntimeRequestInput,

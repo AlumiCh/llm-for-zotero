@@ -557,6 +557,8 @@ function buildTargetedPaperGroups(
     const outline = outlineByPaper?.get(key);
     return {
       paperContext,
+      // Retrieval keeps every paper's best candidate whatever the call's
+      // topK, so a paper without passages had no candidate in scope.
       status: !passages.length
         ? "no_matches"
         : passages.every(
@@ -632,9 +634,8 @@ async function readManifestStructure(
 /**
  * Does any chunk of this paper sit in one of the requested sections and carry
  * text? The outline that resolved those ids is built from the same chunk
- * metadata, so this is the honest answer to "is the requested scope empty?".
- * A retrieval result is not: a read of several papers keeps only its best
- * passages, so a paper can be out-ranked with its sections full of text.
+ * metadata, so this is the honest answer to "is the requested scope empty?",
+ * and it is known before the read.
  */
 function sectionsHoldText(
   paperContent: PdfContext | undefined,
@@ -755,8 +756,10 @@ function buildQuoteCitationFromResult(
     quoteText: exactQuoteText,
     sourceMatchText: exactQuoteText,
     sourceMatchKind: "exact",
-    sourceMatchSource:
-      pageHintIndex === undefined ? "context-text" : "pdf-page-text",
+    // Tool text carries no page-text fingerprint, and a MinerU chunk's single
+    // page is its section heading's page, so the page stays a hint. Only the
+    // answer-time gate, reading the PDF's own page text, records a location.
+    sourceMatchSource: "context-text",
     citationLabel:
       normalizeString(result.sourceLabel) ||
       normalizeString(result.citationLabel),
@@ -771,19 +774,34 @@ function buildQuoteCitationFromResult(
   });
 }
 
+/**
+ * The citations a result's candidates yield, as the returned citation list
+ * registers them. Every candidate is built and filtered before any is chosen,
+ * so a rejected first sentence run does not leave the passage without an
+ * anchor; and the merge filter runs here, so an id shown with a passage is
+ * never one that the returned list later drops.
+ */
+function buildRegisteredQuoteCitations(
+  result: Record<string, unknown>,
+  quoteTexts: string[],
+): QuoteCitation[] {
+  return mergeQuoteCitations(
+    quoteTexts
+      .map((quoteText) => buildQuoteCitationFromResult(result, quoteText))
+      .filter((entry): entry is QuoteCitation => Boolean(entry)),
+  );
+}
+
 function buildQuoteCitationsFromResult(
   result: Record<string, unknown>,
   maxQuotes: number,
 ): QuoteCitation[] {
   const resultText = normalizeString(result.text) || "";
   const candidates = splitOverviewQuoteCandidates(resultText);
-  const quoteTexts = (candidates.length ? candidates : [resultText]).slice(
-    0,
-    Math.max(1, Math.floor(maxQuotes)),
-  );
-  return quoteTexts
-    .map((quoteText) => buildQuoteCitationFromResult(result, quoteText))
-    .filter((entry): entry is QuoteCitation => Boolean(entry));
+  return buildRegisteredQuoteCitations(
+    result,
+    candidates.length ? candidates : [resultText],
+  ).slice(0, Math.max(1, Math.floor(maxQuotes)));
 }
 
 function splitOverviewQuoteCandidates(text: string): string[] {
@@ -845,12 +863,10 @@ function buildOverviewQuoteCitationPack(
     ) {
       return result;
     }
-    const quoteTexts = splitOverviewQuoteCandidates(
-      normalizeString(result.text) || "",
+    const resultCitations = buildRegisteredQuoteCitations(
+      result,
+      splitOverviewQuoteCandidates(normalizeString(result.text) || ""),
     );
-    const resultCitations = quoteTexts
-      .map((quoteText) => buildQuoteCitationFromResult(result, quoteText))
-      .filter((entry): entry is QuoteCitation => Boolean(entry));
     quoteCitations.push(...resultCitations);
     return resultCitations.length
       ? {

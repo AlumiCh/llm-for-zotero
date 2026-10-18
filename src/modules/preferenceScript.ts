@@ -2626,8 +2626,10 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         );
         const resolveDetectedProfile = () =>
           getModelCapabilities({
+            // Gateways and local runtimes still need model-family inference.
+            // SiliconFlow needs its identity for catalogs on custom relay URLs.
             provider:
-              selectedPresetId === "customized" ? undefined : selectedPresetId,
+              selectedPresetId === "siliconflow" ? selectedPresetId : undefined,
             model: modelEntry.model,
             apiBase: group.apiBase,
             protocol: resolveModelSelectedProtocol(

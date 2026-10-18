@@ -23,12 +23,23 @@ import {
  * leaves out (214 tool characters, 2026-10-02), and again by literature_search
  * saying that its metadata mode proposes changes for the user to approve, so
  * a review never asks to change an item it only reads, and that it searches
- * outside the library only on request (324 tool characters, 2026-10-03).
+ * outside the library only on request (324 tool characters, 2026-10-03),
+ * and again by the citation contract saying how to quote a passage that has
+ * no ID instead of constructing one, and to copy quoted text with its
+ * extraction artifacts (190 characters, 2026-10-09), and again by the
+ * agent stop rules' lookup-first route: library_search says to look a named
+ * paper up by title or author first, and the library_retrieve guidance tells
+ * a candidate from a found paper and a paper's passage absence from its
+ * absence from the library (249 characters, 2026-10-13), and again when
+ * that guidance said to check a candidate's title and authors against what
+ * was asked and to name it with what matches and what does not, after a
+ * benchmark run where the shorter rule led to a false "not in your
+ * library" for a paper the agent had read (100 characters, 2026-10-13).
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 35_532,
-  paper: 34_764,
-  collection: 35_630,
+  global: 36_071,
+  paper: 34_822,
+  collection: 36_169,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

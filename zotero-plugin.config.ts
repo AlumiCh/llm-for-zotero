@@ -68,9 +68,9 @@ export default defineConfig({
     entries:
       process.env.LLM_FOR_ZOTERO_TEST_ENTRIES ||
       (agentLiveTestsEnabled
-        ? "test-live-agent"
+        ? "test-live/agent"
         : webChatLiveTestsEnabled
-          ? "test-live-workflows"
+          ? "test-live/webchat"
           : workflowTestsEnabled
             ? "test-workflows"
             : "test"),

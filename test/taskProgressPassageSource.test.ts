@@ -7,6 +7,7 @@ import {
   buildTaskPaperPassageSearchTexts,
   canOpenTaskPaperPassage,
   taskPaperPassagePageLabel,
+  taskPaperPassageTargetPageLabel,
   type TaskPaperPassageTarget,
 } from "../src/modules/contextPanel/taskProgress/passageSource";
 
@@ -29,6 +30,24 @@ describe("task progress passage source", function () {
     assert.equal(taskPaperPassagePageLabel("Methods §2.3"), "");
     assert.equal(taskPaperPassagePageLabel("Appendix p. 4"), "");
     assert.equal(taskPaperPassagePageLabel(undefined), "");
+  });
+
+  it("falls back to the page a target names outright, else the one its label names", function () {
+    assert.equal(
+      taskPaperPassageTargetPageLabel({
+        label: "(Smith, 2021)",
+        pageLabel: "7",
+      }),
+      "7",
+    );
+    assert.equal(
+      taskPaperPassageTargetPageLabel({ label: "p. 4", pageLabel: " " }),
+      "4",
+    );
+    assert.equal(
+      taskPaperPassageTargetPageLabel({ label: "(Smith, 2021)" }),
+      "",
+    );
   });
 
   it("offers a read with text, or a page read that names its page", function () {

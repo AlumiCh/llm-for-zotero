@@ -144,7 +144,7 @@ export class CodexResponsesAgentAdapter implements AgentModelAdapter {
           ...buildPromptCachePayloadHints(request.contextCache),
           include: ["reasoning.encrypted_content"],
           tools: buildResponsesFunctionTools(params.tools),
-          tool_choice: "auto",
+          tool_choice: params.toolChoice === "none" ? "none" : "auto",
           store: false,
           stream: true,
           ...reasoningPayload.extra,

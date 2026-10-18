@@ -324,7 +324,7 @@ describe("library text indexer", function () {
     // As the previous chunker stored it: its version, no enclosing section.
     await store.upsertDocument({
       ...current,
-      chunkerVersion: LIBRARY_TEXT_INDEX_CHUNKER_VERSION - 1,
+      chunkerVersion: LIBRARY_TEXT_INDEX_CHUNKER_VERSION - 2, // 2 would only be re-posted
       chunks: current.chunks.map((chunk) => {
         const { enclosingSection: _dropped, ...meta } = chunk.meta;
         return { ...chunk, meta };
@@ -453,7 +453,8 @@ describe("library text indexer", function () {
       `${computeChunkerFingerprint(bio)}:${computeChunkerFingerprint(math)}`,
       "3cb58673:2c4c17d6",
     );
-    assert.equal(LIBRARY_TEXT_INDEX_CHUNKER_VERSION, 2);
+    assert.equal(LIBRARY_TEXT_INDEX_CHUNKER_VERSION, 3);
+    // 3 is 2 plus stemmed postings: the boundaries (fingerprint) are unchanged.
   });
   it("never triggers a write-through listener, in either lane", async function () {
     await buildFixturePdfContext("bioSingleHash", 9001);

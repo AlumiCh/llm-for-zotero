@@ -8,11 +8,25 @@ import {
   estimateContextMessagesTokens,
   sliceTextToTokenBudget,
 } from "../../utils/modelInputCap";
+import { SELECTED_TEXT_QUESTIONS_INSTRUCTION } from "../../services/context/selectedTextAnchorFormatting";
 import type { AgentContextBudgetState } from "./budgetPolicy";
 import {
   createAgentToolResultHandleRecord,
   type AgentToolResultHandleRecord,
 } from "../store/toolResultHandles";
+
+/**
+ * The chip questions of a user message whose request is only the
+ * questions-instruction: the questions themselves sit under each selection.
+ */
+function readSelectedTextQuestions(text: string): string {
+  return Array.from(
+    text.matchAll(/\nQuestion about this text:\n([\s\S]*?)(?=\n\n|$)/g),
+    (match) => match[1].trim(),
+  )
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 export type AgentTranscriptCompactionResult = {
   compacted: boolean;
@@ -188,8 +202,13 @@ function buildSummaryMessage(
         continue;
       }
       const rootGoalMatch = text.match(/(?:^|\n)User request:\s*([\s\S]*)$/i);
-      if (rootGoalMatch?.[1]?.trim()) {
-        rootUserGoals.push(rootGoalMatch[1].trim());
+      const rootGoal = rootGoalMatch?.[1]?.trim();
+      if (rootGoal) {
+        rootUserGoals.push(
+          rootGoal === SELECTED_TEXT_QUESTIONS_INSTRUCTION
+            ? readSelectedTextQuestions(text) || rootGoal
+            : rootGoal,
+        );
       }
       userLines.push(
         `- ${message.messageId ? `messageId=${message.messageId} ` : ""}${truncateText(text.replace(/^User request:\s*/i, ""), 220)}`,

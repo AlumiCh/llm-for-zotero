@@ -9,6 +9,7 @@ import {
   readRetainedWorkingDirectory,
 } from "../src/agent/context/transcriptCompactor";
 import type { AgentModelMessage } from "../src/agent/types";
+import { SELECTED_TEXT_QUESTIONS_INSTRUCTION } from "../src/services/context/selectedTextAnchorFormatting";
 
 describe("agent transcript compactor", function () {
   it("keeps tool data out of user decisions and keeps exact message and result references in summaries", function () {
@@ -46,6 +47,30 @@ describe("agent transcript compactor", function () {
     assert.include(checkpoint.content, "decision-1");
     assert.include(checkpoint.content, "answer-1");
     assert.include(checkpoint.content, "trh_abc123");
+  });
+  it("keeps chip questions as the root goal when the request is only the questions-instruction", function () {
+    const { checkpoint } = buildAgentSemanticCheckpoint({
+      summaryTokens: 2000,
+      messages: [
+        {
+          role: "user",
+          content: [
+            'Selected text 1 [source=paper]:\n"""\nFirst quote.\n"""\nQuestion about this text:\nWhat does the first imply?',
+            'Selected text 2 [source=paper]:\n"""\nSecond quote.\n"""\nQuestion about this text:\nIs the second one robust?',
+            `User request:\n${SELECTED_TEXT_QUESTIONS_INSTRUCTION}`,
+          ].join("\n\n"),
+          messageId: "chip-questions-1",
+        },
+      ],
+    });
+    assert.include(
+      checkpoint.content,
+      "Latest root user goal: What does the first imply? Is the second one robust?",
+    );
+    assert.notInclude(
+      checkpoint.content,
+      `Latest root user goal: ${SELECTED_TEXT_QUESTIONS_INSTRUCTION}`,
+    );
   });
   it("retains action destinations and successful working directories without retaining provider execution fields", function () {
     const source: AgentModelMessage[] = [

@@ -186,6 +186,18 @@ export const OUTCOME_REASONS = Object.freeze({
   notCovered: "Not covered by the delivered content",
 });
 
+/**
+ * Stops that keep the run's work and leave the rest for "continue", with or
+ * without outcome evidence (`turnBoundary.ts`, Rules 3 and 4): a safety
+ * limit, a lost connection, a prompt that stays too long after compaction.
+ */
+const RESUMABLE_INCIDENT_STOP_RULES: ReadonlySet<RunStopRule> =
+  new Set<RunStopRule>([
+    "budget_reached",
+    "connection_lost",
+    "prompt_budget_exceeded",
+  ]);
+
 /** The refusal of an exclusion without its reason. */
 const EXCLUSION_REASON_REQUIRED = "An excluded paper needs the reason.";
 
@@ -254,7 +266,6 @@ const NOTE_CREATING_OPERATIONS: ReadonlySet<string> = new Set([
 ]);
 const INTERRUPTING_STOP_RULES: ReadonlySet<RunStopRule> = new Set<RunStopRule>([
   "interrupted_by_error",
-  "stream_interrupted_again",
   "incomplete_step_limit",
   "segment_without_progress",
   "repeated_tool_errors",
@@ -2180,15 +2191,44 @@ export function decideRunEnd(
   if (run.status === "cancelled") return "cancelled";
   if (standing.some((task) => task.status === "blocked")) return "blocked";
   if (run.status === "failed") {
+    if (RESUMABLE_INCIDENT_STOP_RULES.has(run.stopRule)) return "interrupted";
     return INTERRUPTING_STOP_RULES.has(run.stopRule) && tasks.some(hasEvidence)
       ? "interrupted"
       : "failed";
   }
+  // An answer written without tools after the search ran out says what it
+  // could not confirm: never a plain completion.
+  if (run.stopRule === "search_exhausted") return "completed_with_exceptions";
   return standing.some(
     (task) => task.status !== "completed" || task.exceptions?.length,
   )
     ? "completed_with_exceptions"
     : "completed";
+}
+
+/**
+ * The model's open parts, closed as skipped with `reason`: a forced final
+ * answer (`search_exhausted`) can no longer do them. Skipped, not blocked, so
+ * the run ends completed with exceptions rather than blocked.
+ */
+export function closeOpenOutcomes(
+  checkpoint: ExecutionCheckpoint,
+  reason: string,
+  now: number,
+): ExecutionCheckpoint {
+  const open = new Set(
+    openDeclaredOutcomes(checkpoint).map((task) => task.taskId),
+  );
+  if (!open.size) return checkpoint;
+  return {
+    ...checkpoint,
+    tasks: checkpoint.tasks.map((task) =>
+      open.has(task.taskId)
+        ? { ...task, status: "skipped", reason, updatedAt: now }
+        : task,
+    ),
+    updatedAt: now,
+  };
 }
 
 /** Record the end state; with exceptions, pending outcomes become skipped. */

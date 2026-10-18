@@ -132,8 +132,13 @@ export type TaskPaperCitation = {
   sectionLabel?: string;
   /** Every document section the citation is used in, when more than one. */
   sectionLabels?: string[];
-  /** The page label the quote recorded; for display. */
+  /**
+   * The printed page the quote recorded (a bare label such as "7" or "iv").
+   * Opening the citation falls back to this page when its text is not found.
+   */
   pageLabel?: string;
+  /** The attachment the quote was taken from, when the citation names it. */
+  contextItemId?: number;
   /**
    * "document" for a source a `submit_document` call cited; absent (or
    * "answer") for a quote chip of the final answer.
@@ -1812,6 +1817,8 @@ export function applyFinalCitations(
       cited.sectionLabel = citation.sourceSectionLabel;
     }
     if (citation.pageHintLabel) cited.pageLabel = citation.pageHintLabel;
+    const attachment = positive(citation.contextItemId);
+    if (attachment) cited.contextItemId = attachment;
     // Answer citations lead; a document's follow them.
     turn.citations.splice(answerCitations, 0, cited);
   }

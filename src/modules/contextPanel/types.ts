@@ -76,6 +76,11 @@ export interface Message {
   selectedTextPaperContexts?: (PaperContextRef | undefined)[];
   selectedTextNoteContexts?: (NoteContextRef | undefined)[];
   selectedTextExpandedIndex?: number;
+  /**
+   * Session-only: the sent chips the user left expanded, after a toggle.
+   * Unset means the default (chips with a question open).
+   */
+  selectedTextExpandedIndices?: number[];
   screenshotImages?: string[];
   paperContexts?: PaperContextRef[];
   pdfPaperContexts?: PaperContextRef[];

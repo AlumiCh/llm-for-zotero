@@ -69,9 +69,9 @@ function utf8ByteLength(text: string): number {
 }
 
 /** Stored text as UTF-8 plus a fixed cost per posting row (the byte budget's unit). */
-export function estimateDocumentBytes(
-  doc: Pick<IndexDocumentInput, "chunks">,
-): number {
+export function estimateDocumentBytes(doc: {
+  chunks: Array<Pick<IndexDocumentInput["chunks"][number], "text" | "tf">>;
+}): number {
   let bytes = 0;
   for (const chunk of doc.chunks) {
     bytes +=

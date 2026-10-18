@@ -362,6 +362,88 @@ describe("context cache manager", function () {
     });
   });
 
+  it("keeps the Anthropic agent plan on when the resource context is short or empty", function () {
+    // The fixed agent prompt and tool list (~11.5k tokens) are re-sent every
+    // round, far above every Claude cache minimum, whatever the resource
+    // context adds. Gating on the resource context alone sent no
+    // cache_control at all for library chats.
+    const agentPlan = (
+      model: string,
+      apiBase: string,
+      protocol: "anthropic_messages" | "openai_chat_compat" | "responses_api",
+      contextText: string,
+    ) =>
+      planContextCacheReuse({
+        model,
+        apiBase,
+        protocol,
+        mode: "full",
+        strategy: "agent-stable-resources",
+        contextText,
+      });
+    const shortContext =
+      "Current Zotero context summary:\n- Active item ID: 42";
+    for (const contextText of ["", shortContext]) {
+      const plan = agentPlan(
+        "claude-haiku-5-5",
+        "https://api.anthropic.com/v1",
+        "anthropic_messages",
+        contextText,
+      );
+      assert.isTrue(plan.enabled, JSON.stringify(contextText));
+      assert.equal(plan.mode, "anthropic_block");
+      // A short context never earns the 1h TTL: five minutes it is.
+      assert.deepEqual(plan.requestHints, {
+        anthropicBlockCacheControl: { type: "ephemeral" },
+        anthropicToolCacheControl: { type: "ephemeral" },
+        anthropicRequestCacheControl: { type: "ephemeral" },
+      });
+    }
+
+    // Every other provider keeps its own rules.
+    const others: Array<
+      [
+        string,
+        string,
+        "anthropic_messages" | "openai_chat_compat" | "responses_api",
+      ]
+    > = [
+      ["minimax-m2", "https://api.minimax.io/anthropic", "anthropic_messages"],
+      ["deepseek-chat", "https://api.deepseek.com/v1", "openai_chat_compat"],
+      ["gpt-5.4", "https://api.openai.com/v1/responses", "responses_api"],
+      [
+        "gemini-2.5-pro",
+        "https://generativelanguage.googleapis.com/v1beta",
+        "openai_chat_compat",
+      ],
+    ];
+    for (const [model, apiBase, protocol] of others) {
+      assert.equal(
+        agentPlan(model, apiBase, protocol, "").reason,
+        "empty-context",
+        model,
+      );
+      assert.equal(
+        agentPlan(model, apiBase, protocol, shortContext).reason,
+        "below-cache-threshold",
+        model,
+      );
+    }
+
+    // A non-agent Anthropic plan still needs a cacheable context of its own.
+    assert.equal(
+      planContextCacheReuse({
+        model: "claude-haiku-5-5",
+        apiBase: "https://api.anthropic.com/v1",
+        protocol: "anthropic_messages",
+        mode: "full",
+        strategy: "paper-cache-full",
+        contextText: shortContext,
+      }).reason,
+      "below-cache-threshold",
+    );
+  });
+
   it("keeps Anthropic 1h TTL off for write-heavy warm contexts", function () {
     const contextText = "stable paper text ".repeat(5000);
     const plan = planContextCacheReuse({

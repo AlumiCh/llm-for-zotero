@@ -310,10 +310,20 @@ export function planContextCacheReuse(params: {
     reason,
   });
 
+  // An Anthropic agent request re-sends its fixed prompt and tool list
+  // (~11.5k tokens) every round, above every Claude cache minimum, so its
+  // breakpoints pay off whatever the resource context adds. Other providers
+  // cache a prefix on their own and keep the resource-context gate.
+  const cachesFixedAgentPrefix =
+    capability.provider === "anthropic" &&
+    params.strategy === "agent-stable-resources";
+
   if (capability.kind === "none") return disabled("provider-unsupported");
-  if (!contextText.trim()) return disabled("empty-context");
+  if (!cachesFixedAgentPrefix && !contextText.trim()) {
+    return disabled("empty-context");
+  }
   if (params.mode !== "full") return disabled("retrieval-mode");
-  if (contextTokens < CACHE_MIN_TOKENS)
+  if (!cachesFixedAgentPrefix && contextTokens < CACHE_MIN_TOKENS)
     return disabled("below-cache-threshold");
 
   const { cacheKey, contentHash } = buildContextCacheKey({

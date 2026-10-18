@@ -11,6 +11,7 @@ import {
   withConversationWriteLock,
 } from "../../shared/conversationWriteFence";
 import { isConversationKeyRetiredInMemory } from "../../shared/conversationKeyLedger";
+import { normalizeArxivId, normalizeDoi } from "./paperWorkIdentity";
 
 export type LiteratureDiscoveryRequest = {
   batchSize: number;
@@ -161,36 +162,6 @@ async function save(
 ) {
   assertActive(context);
   await upsertAgentToolResultHandles([record]);
-}
-
-/** Lowercase a DOI and strip `doi:` / resolver-URL prefixes. */
-function normalizeDoi(value: unknown): string {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/^doi:\s*/, "")
-    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//, "")
-    .trim();
-}
-
-/**
- * Bare, version-free arXiv id from an id, `arXiv:` form or arxiv.org
- * abs/pdf URL; empty when the value is not an arXiv id. Versions of one
- * paper share an id, so they match and dedupe as one paper.
- */
-function normalizeArxivId(value: unknown): string {
-  const id = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/^arxiv:\s*/, "")
-    .replace(
-      /^(?:https?:\/\/)?(?:www\.|export\.)?arxiv\.org\/(?:abs|pdf)\//,
-      "",
-    )
-    .replace(/\.pdf$/, "")
-    .replace(/\/$/, "")
-    .replace(/v\d+$/, "");
-  return /^(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z-]+)?\/\d{7})$/.test(id) ? id : "";
 }
 
 /** Match identifiers across providers, with normalized title as a metadata fallback. */

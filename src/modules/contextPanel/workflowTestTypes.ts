@@ -6,6 +6,13 @@ import type { resolveRetrievalQueryPlan } from "../../services/retrieval/retriev
 import type { RetrievalTimingReport } from "../../services/retrieval/retrievalTiming";
 import type { LibraryTextIndexStatus } from "../../services/libraryTextIndex/scheduler";
 import type { LibraryRetrieveResult } from "../../agent/services/libraryRetrieveService";
+import type { CodexAppServerModelCatalogEntry } from "../../codexAppServer/modelCatalog";
+
+export type WorkflowTestCodexModelCatalogResponse = {
+  models?: CodexAppServerModelCatalogEntry[];
+  error?: string;
+  delayed?: boolean;
+};
 
 export type WorkflowTestFixture = {
   parentItemId: number;
@@ -506,6 +513,29 @@ export type WorkflowTestApi = {
     stale: number;
     skippedForBudget: number;
   }>;
+  // Stops the index, rewrites it into the shape a pre-stemming build left
+  // (surface-token postings for these documents, no document_tokenizer
+  // table, no tokenizer_version row), then starts it as Zotero startup does.
+  restartLibraryTextIndexFromPreStemmingShape: (
+    attachmentIds: number[],
+  ) => Promise<void>;
+  // The recorded tokenizer version (null = none) and how many documents
+  // still wait for the re-posting pass.
+  libraryTextIndexTokenizerState: () => Promise<{
+    recordedVersion: string | null;
+    documentsNeedingRepost: number;
+  }>;
+  // One document's posting terms, sorted.
+  libraryTextIndexPostingTerms: (attachmentId: number) => Promise<string[]>;
+  // A library text index search through the plugin's own store.
+  searchLibraryTextIndexForTest: (input: {
+    queries: string[];
+    attachmentIds: number[];
+  }) => Promise<{
+    paperAttachmentIds: number[];
+    matchedTerms: string[];
+    snippets: string[];
+  }>;
   // Loads one attachment's text through the question path (fires write-through).
   loadPaperContextForTest: (attachmentId: number) => Promise<void>;
   // Drops every loaded paper text and retrieval candidate so the next
@@ -633,6 +663,16 @@ export type WorkflowTestApi = {
     inputTokenCap: number;
     stopAfterNotes: number;
   }) => ReturnType<typeof import("./longJobReplay").exerciseLongJobNoteResume>;
+  /**
+   * One scenario of the agent stop rules (turnBoundary.ts) through the
+   * panel's send flow; only the model is scripted.
+   */
+  exerciseAgentStopRules: (input: {
+    panelId: string;
+    scenario: import("./stopRulesReplay").StopRuleScenario;
+    collection?: import("../../shared/types").CollectionContextRef;
+    papers?: Array<{ itemId: number; title: string }>;
+  }) => ReturnType<typeof import("./stopRulesReplay").exerciseAgentStopRules>;
   /**
    * A note job whose one note_write_batch is stopped while it writes, the
    * agent's state reloaded as at startup, then "continue"; only the model is
@@ -957,6 +997,18 @@ export type WorkflowTestApi = {
   getConversationHistoryTexts: (
     conversationKey: number,
   ) => Promise<WorkflowTestConversationHistoryTexts>;
+  /**
+   * Stores turns for an ordinary conversation, and adds them to its
+   * in-memory chat when a panel already loaded it. Draws nothing.
+   */
+  seedStoredConversationTurns: (
+    conversationKey: number,
+    turns: Array<{
+      role: "user" | "assistant";
+      text: string;
+      timestamp: number;
+    }>,
+  ) => Promise<void>;
   seedStandaloneUserMessage: (
     text: string,
   ) => Promise<WorkflowTestStandaloneDiagnostics>;
@@ -998,6 +1050,11 @@ export type WorkflowTestApi = {
   getLastSend: () => SendQuestionOptions | null;
   getDiagnostics: (panelId?: string) => Promise<WorkflowTestDiagnostics>;
   configurePermissionCatalogs: (input?: { delayFirstCodex?: boolean }) => void;
+  configureCodexModelCatalogs: (
+    responses: WorkflowTestCodexModelCatalogResponse[],
+  ) => void;
+  getCodexModelCatalogRequests: () => string[];
+  resolveDelayedCodexModelCatalog: () => Promise<void>;
   resolveDelayedCodexPermissionCatalog: () => Promise<void>;
   getPanelPermissionSurface: (
     panelId: string,
@@ -1036,6 +1093,92 @@ export type WorkflowTestApi = {
     pageIndex: number;
     selectedText: string;
   }) => Promise<WorkflowTestReaderPopupStandaloneRoutingDiagnostics>;
+  exerciseReaderPopupInlinePrompt: (input: {
+    panelId: string;
+    attachmentItemId: number;
+    pageIndex: number;
+    selectedText: string;
+    prompt: string;
+  }) => Promise<{
+    chipAddedBeforeEnter: boolean;
+    overlayMounted: boolean;
+    /** URL of the document the overlay mounted in (the reader UI document). */
+    overlayDocumentUrl: string;
+    /** The selection quoted above the editor, and its label. */
+    quoteText: string;
+    quoteLabel: string;
+    buttonLabel: string;
+    /** Editing keys dispatched in the overlay editor, before the prompt. */
+    editorKeys: Array<{ key: string; defaultPrevented: boolean }>;
+    /** Reader tool and annotation selection, before and after those keys. */
+    readerKeyStateBefore: string;
+    readerKeyStateAfter: string;
+    /** Whether Enter in the box sent anything within 1 s (it must not). */
+    sentOnEnter: boolean;
+    /** The chip's userQuery after Enter. */
+    attachedQuestion: string;
+    /** Chips holding the selected text after Enter. */
+    chipCount: number;
+    /** `.llm-selected-context-question` text in the panel preview, or null
+     * when the preview renders no question element. */
+    previewQuestionText: string | null;
+    /** Section labels in the panel preview card, in order. */
+    previewLabels: string[];
+    overlayRemovedAfterEnter: boolean;
+    composerAfterEnter: string;
+    statusAfterEnter: string;
+    /** The later main Send with an empty composer: the model-facing
+     * question, the user turn as shown in the chat, and the chip texts. */
+    sentQuestion: string;
+    sentDisplayQuestion: string;
+    sentSelectedTexts: string[];
+    /** The sent user bubble once rendered: its visible body text ("" when
+     * hidden or absent), the questions inside its shown chip cards, and the
+     * number of bars drawn for chips that have a question (one card and no
+     * bar each, so 0). */
+    sentBubbleBodyText: string;
+    sentBubbleChipQuestions: string[];
+    sentBubbleBarCount: number;
+  }>;
+  exerciseReaderPopupDuplicateAttach: (input: {
+    panelId: string;
+    attachmentItemId: number;
+    pageIndex: number;
+    selectedText: string;
+    firstPrompt: string;
+    secondPrompt: string;
+  }) => Promise<{
+    firstMounted: boolean;
+    /** The chip question after the first add and Enter. */
+    firstQuestion: string;
+    /** The second Add Text on the same selection reopened the box. */
+    secondMounted: boolean;
+    secondQuoteText: string;
+    statusBeforeSecondEnter: string;
+    secondOverlayRemovedAfterEnter: boolean;
+    chipCount: number;
+    finalQuestion: string;
+    sent: boolean;
+  }>;
+  exerciseReaderPopupPromptDismissal: (input: {
+    panelId: string;
+    attachmentItemId: number;
+    pageIndex: number;
+    firstSelectedText: string;
+    secondSelectedText: string;
+  }) => Promise<{
+    firstMounted: boolean;
+    escapeClosed: boolean;
+    firstChipsAfterEscape: number;
+    secondMounted: boolean;
+    /** The box lives in reader.html; the page click lands in viewer.html. */
+    overlayAndPageInDifferentDocuments: boolean;
+    pageClickClosed: boolean;
+    secondChipsAfterPageClick: number;
+    /** Chips that carry a question; dismissal attaches none. */
+    chipsWithQuestion: number;
+    sent: boolean;
+  }>;
   exerciseHighlightAwareContextRetrieval: (input: {
     panelId: string;
     attachmentItemId: number;
@@ -1044,6 +1187,88 @@ export type WorkflowTestApi = {
     question: string;
     trigger: "popup" | "action-bar";
   }) => Promise<WorkflowTestHighlightAwareRetrievalDiagnostics>;
+  exerciseContextChipCardVisibility: (input: {
+    panelId?: string;
+    standalone: boolean;
+    selectedText: string;
+  }) => Promise<{
+    cardWidth: number;
+    cardHeight: number;
+    cardTop: number;
+    cardBottom: number;
+    /** Top edge of #llm-context-previews. */
+    rowTop: number;
+    /** Card edge distance from the .llm-input-section edge. */
+    leftInset: number;
+    rightInset: number;
+    /** Whether elementFromPoint at the card center lands in the card. */
+    hitIsCard: boolean;
+    hitDescription: string;
+  }>;
+  exerciseAssistantSelectionInlinePrompt: (input: {
+    panelId: string;
+    assistantText: string;
+    selectedText: string;
+    prompt: string;
+  }) => Promise<{
+    popupVisible: boolean;
+    promptExpandedAfterQuote: boolean;
+    chipAddedBeforeAttach: boolean;
+    /** The section label and the quoted selection shown above the input. */
+    boxSelectedTextLabel: string;
+    boxSelectedText: string;
+    hintText: string;
+    /** Whether the send interceptor fired within 1 s of Enter in the box. */
+    sentWithinOneSecond: boolean;
+    /** The chip's userQuery after Enter. */
+    attachedQuestion: string;
+    /** Chips holding the selected text after Enter. */
+    chipCount: number;
+    /** `.llm-selected-context-question` text in the panel's chip preview. */
+    previewQuestionText: string;
+    previewLabels: string[];
+    popupHiddenAfterAttach: boolean;
+    composerAfterAttach: string;
+    statusAfterAttach: string;
+    composerFocusedAfterAttach: boolean;
+    /** The model-facing question of the main Send with an empty composer. */
+    sentQuestion: string;
+    /** The user turn as shown in the chat (displayQuestion). */
+    sentDisplayQuestion: string;
+    sentSelectedTexts: string[];
+    /** The sent user bubble once rendered: its visible body text ("" when
+     * hidden or absent), the questions inside its shown chip cards, and the
+     * number of bars drawn for chips that have a question (one card and no
+     * bar each, so 0). */
+    sentBubbleBodyText: string;
+    sentBubbleChipQuestions: string[];
+    sentBubbleBarCount: number;
+  }>;
+  exerciseAssistantSelectionPromptDismissal: (input: {
+    panelId: string;
+    assistantText: string;
+    firstSelectedText: string;
+    secondSelectedText: string;
+    /** Typed into the box that a duplicate quote of the first text opens. */
+    duplicatePrompt: string;
+  }) => Promise<{
+    firstExpanded: boolean;
+    escapeClosed: boolean;
+    firstChipsAfterEscape: number;
+    firstQuestionAfterEscape: string;
+    /** Quoting the same text again opens the box for the existing chip. */
+    duplicateExpanded: boolean;
+    duplicateStatus: string;
+    firstChipsAfterDuplicate: number;
+    duplicateAttachClosed: boolean;
+    firstChipsAfterDuplicateAttach: number;
+    firstQuestionAfterDuplicateAttach: string;
+    secondExpanded: boolean;
+    emptyEnterClosed: boolean;
+    secondChipsAfterEmptyEnter: number;
+    secondQuestionAfterEmptyEnter: string;
+    sent: boolean;
+  }>;
   cleanupFixture: (
     fixture:
       | WorkflowTestFixture
@@ -1099,6 +1324,18 @@ export type WorkflowTestApi = {
   isFinalRequestHeld: () => Promise<boolean>;
   releaseFinalRequest: () => Promise<void>;
   forceWebChatSessionAnchorFailures: (count: number) => Promise<void>;
+  /** Makes the next N in-place paper switches fail before they draw. */
+  failNextInPlacePaperSwitches: (count: number) => Promise<void>;
+  /** Forced in-place switch failures that no switch has used yet. */
+  getPendingInPlacePaperSwitchFailures: () => Promise<number>;
+  /**
+   * Adds a selected-text chip to the conversation a mounted pane shows, or
+   * clears its chips when text is null. Resolves to that conversation's key.
+   */
+  setMountedPanelSelectedText: (
+    body: Element,
+    text: string | null,
+  ) => Promise<number>;
   askCapturingFinalRequest: (
     panelId: string,
     text: string,

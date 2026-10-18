@@ -136,7 +136,7 @@ function harness(overrides: Partial<AssistantTurnDeps> = {}) {
 }
 
 /** Long enough to cross the coalescer's target, ending at a block boundary. */
-const PARAGRAPH = `${"word ".repeat(40)}\n\n`;
+const PARAGRAPH = `${"word ".repeat(60)}\n\n`;
 const COMPLETE: ModelTurnOutcome = {
   text: "",
   completion: { status: "complete" },

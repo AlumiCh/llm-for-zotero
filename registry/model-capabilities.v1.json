@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 5,
+  "revision": 7,
   "models": [
     {
       "match": {
@@ -490,6 +490,20 @@
         "contextWindowTokens": 200000,
         "inputTokens": 200000,
         "outputTokens": 64000
+      }
+    },
+    {
+      "match": {
+        "provider": "anthropic",
+        "prefix": "claude-haiku-5-5"
+      },
+      "limits": {
+        "contextWindowTokens": 1000000,
+        "inputTokens": 1000000,
+        "outputTokens": 128000
+      },
+      "sampling": {
+        "temperature": "unsupported"
       }
     },
     {

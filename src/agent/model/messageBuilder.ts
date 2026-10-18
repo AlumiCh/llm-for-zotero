@@ -55,7 +55,10 @@ import {
 import { synthesizeSelectedTextContexts } from "../../services/context/normalizers";
 import {
   formatSelectedTextLocator,
+  formatSelectedTextQuestionSuffix,
+  isPromptOnlySelectedTextQuestions,
   renderSelectedTextAnchorContext,
+  SELECTED_TEXT_QUESTIONS_INSTRUCTION,
 } from "../../services/context/selectedTextAnchorFormatting";
 import {
   buildInstructionInventory,
@@ -282,6 +285,9 @@ function buildFullUserMessage(
           selectedTextContexts[index],
           anchorsByIndex.get(index),
         );
+        const question = formatSelectedTextQuestionSuffix(
+          selectedTextContexts[index]?.userQuery,
+        );
         const embedTokens =
           source === "note-edit" && request.activeNoteContext
             ? findNoteEmbedTokensInSelection(
@@ -292,7 +298,7 @@ function buildFullUserMessage(
         const embedHint = embedTokens.length
           ? `\nThis selection contains embedded note items. Keep each placeholder in your replacement where its item belongs: ${embedTokens.join(" ")}`
           : "";
-        return `Selected text ${index + 1} [source=${sourceLabel}${sourceMeta}]${locator ? ` ${locator}` : ""}:\n"""\n${entry}\n"""${embedHint}`;
+        return `Selected text ${index + 1} [source=${sourceLabel}${sourceMeta}]${locator ? ` ${locator}` : ""}:\n"""\n${entry}\n"""${question}${embedHint}`;
       })
       .join("\n\n");
     contextLines.push(
@@ -340,9 +346,17 @@ function buildFullUserMessage(
     contextLines.push(options.turnGuidanceBlock);
   }
 
+  // A request that is only the chip questions (empty composer) already shows
+  // each question under its selection above; do not repeat them here.
+  const userRequestText = isPromptOnlySelectedTextQuestions(
+    request.userText,
+    selectedTextContexts,
+  )
+    ? SELECTED_TEXT_QUESTIONS_INSTRUCTION
+    : request.userText;
   const promptText = `${
     contextLines.length ? `${contextLines.join("\n")}\n\n` : ""
-  }User request:\n${request.userText}`;
+  }User request:\n${userRequestText}`;
   const screenshots = Array.isArray(request.screenshots)
     ? request.screenshots.filter((entry) => Boolean(entry))
     : [];

@@ -152,11 +152,13 @@ async function runToEnding(
     request: AgentRuntimeRequest;
     registry?: AgentToolRegistry;
     signal?: AbortSignal;
+    modelRetryBackoffMs?: readonly number[];
   },
 ): Promise<Ending> {
   const runtime = new AgentRuntime({
     registry: params.registry || new AgentToolRegistry(),
     adapterFactory: () => params.adapter,
+    modelRetryBackoffMs: params.modelRetryBackoffMs,
   });
   const liveEvents: AgentEvent[] = [];
   let outcome: AgentRuntimeOutcome | undefined;
@@ -439,9 +441,10 @@ describe("Original Agent run endings", function () {
       request: baseRequest(97_307, "Keep reading until done"),
     });
 
-    const text =
-      "Agent stopped after segment 2 produced no new successful tool result. The completed transcript was saved; narrow or redirect the request before continuing.";
-    assert.equal(adapter.steps(), MAX_AGENT_ROUNDS * 2);
+    // The fingerprint rule is checked every round (turnBoundary.ts): the
+    // first read is progress, then a segment's worth of tool rounds is not.
+    const text = `Agent stopped after ${MAX_AGENT_ROUNDS} tool rounds produced no new successful tool result. The completed transcript was saved; narrow or redirect the request before continuing.`;
+    assert.equal(adapter.steps(), MAX_AGENT_ROUNDS + 1);
     assert.deepInclude(ending.outcome, {
       kind: "completed",
       text,
@@ -522,7 +525,7 @@ describe("Original Agent run endings", function () {
     assertStoppedBy(ending, "answer_continuation_limit", "completed");
   });
 
-  it("stream_interrupted_again: stops when the stream breaks after its one retry", async function () {
+  it("connection_lost: stops when the stream breaks after the retry policy's two retries", async function () {
     const adapter = scriptedAdapter(
       () =>
         ({
@@ -536,15 +539,18 @@ describe("Original Agent run endings", function () {
     const ending = await runToEnding(installed, {
       adapter,
       request: baseRequest(97_309, "Finish this task"),
+      modelRetryBackoffMs: [0, 0],
     });
 
-    const text =
-      "The response stream failed again after one automatic retry. Durable Plan progress was preserved; continue when the connection is available.";
-    assert.equal(adapter.steps(), 2);
-    assert.deepInclude(ending.outcome, { kind: "completed", text });
+    assert.equal(adapter.steps(), 3);
+    assert.equal(ending.outcome?.kind, "completed");
+    assert.include(
+      (ending.outcome as { text?: string }).text,
+      "the model could not be reached after 2 automatic retries",
+    );
+    assert.include((ending.outcome as { text?: string }).text, "continue");
     assert.equal(ending.run.status, "failed");
-    assert.equal(ending.run.finalText, text);
-    assertStoppedBy(ending, "stream_interrupted_again", "failed");
+    assertStoppedBy(ending, "connection_lost", "failed");
   });
 
   it("incomplete_step_limit: stops when incomplete steps reach the round limit", async function () {

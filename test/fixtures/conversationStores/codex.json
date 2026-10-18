@@ -3120,6 +3120,7 @@
       "repairMisroutedCodexConversationRows": "function",
       "setCodexConversationTitle": "function",
       "touchCodexConversationTitle": "function",
+      "updateCodexAssistantMessageQuoteLocations": "function",
       "updateLatestCodexAssistantMessage": "function",
       "updateLatestCodexUserMessage": "function",
       "upsertCodexConversationSummary": "function"

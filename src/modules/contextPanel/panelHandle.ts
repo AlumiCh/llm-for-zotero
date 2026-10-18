@@ -8,6 +8,18 @@ export type PanelHandle = {
   refreshContextSourceForCurrentItem(): void;
   /** Show the reasoning effort that the Claude runtime resolved. */
   applyResolvedClaudeEffort(effort: unknown): void;
+  /**
+   * Move a mounted paper chat to another paper's chat in place, after Zotero
+   * rebound the panel host to that paper. Returns false, changing nothing,
+   * when the panel is in a state only a full remount handles; the caller then
+   * rebuilds. On true the panel draws the new conversation itself, once;
+   * when it cannot, it calls `rebuild` for the host's full remount.
+   */
+  switchToPaperItem(
+    nextItem: Zotero.Item,
+    nextBasePaperItem: Zotero.Item | null,
+    rebuild: () => void,
+  ): boolean;
 };
 
 const panelHandles = new WeakMap<Element, PanelHandle>();

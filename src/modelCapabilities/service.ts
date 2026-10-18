@@ -792,7 +792,10 @@ export function compileReasoningControls(
   const extra = sanitizeUserRequestBody(patched) || {};
   return {
     extra,
-    omitTemperature: Boolean(controls.omitTemperature),
+    // A model that rejects temperature rejects it whatever the option says.
+    omitTemperature:
+      Boolean(controls.omitTemperature) ||
+      capabilities.sampling.temperature !== "configurable",
   };
 }
 

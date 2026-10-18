@@ -565,6 +565,11 @@ describe("outcome ledger in runtime turns", function () {
     });
 
     assert.equal(turn.requests, 2, "no correction: the answer is the part");
+    assert.equal(
+      turn.outcome?.kind === "completed" ? turn.outcome.text : "",
+      "Drift was measured as the change in place-field centres.",
+      "nothing open: the answer stands as written",
+    );
     const ledger = settled(turn);
     assert.deepEqual(ledger.end, { state: "completed" });
     assert.equal(outcome(ledger, "explain").status, "completed");
@@ -592,6 +597,11 @@ describe("outcome ledger in runtime turns", function () {
     assert.deepEqual(
       [outcome(ledger, "save").status, outcome(ledger, "save").reason],
       ["skipped", OUTCOME_REASONS.notDone],
+    );
+    // The answer says what the ledger records: the save was not done.
+    assert.equal(
+      turn.outcome?.kind === "completed" ? turn.outcome.text : "",
+      `Saved.\n\nNot done before this answer: \u201c${SAVE}\u201d 0 of 1 done.`,
     );
   });
 

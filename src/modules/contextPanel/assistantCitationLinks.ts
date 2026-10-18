@@ -98,7 +98,7 @@ import {
 import type { Message, PaperContextRef, QuoteCitation } from "./types";
 import {
   buildTaskPaperPassageSearchTexts,
-  taskPaperPassagePageLabel,
+  taskPaperPassageTargetPageLabel,
   type TaskPaperPassageTarget,
 } from "./taskProgress/passageSource";
 
@@ -2792,7 +2792,7 @@ export async function navigateToTaskPaperPassage(params: {
       target.cleanedSnippet,
       target.rawSnippet,
     );
-    const pageLabel = taskPaperPassagePageLabel(target.label);
+    const pageLabel = taskPaperPassageTargetPageLabel(target);
     const displayLabel = target.label || "Task progress passage";
 
     if (searchTexts.length) {
@@ -3520,6 +3520,21 @@ export function restoreExpandedQuoteCards(
   }
 }
 
+// Only a card whose record was minted from the paper may claim a match.
+function unresolvedQuoteCardTooltip(params: {
+  quoteCitationId?: string;
+  citationContent?: Node;
+}): string {
+  if (params.quoteCitationId) {
+    return params.citationContent
+      ? "Found in the paper; click to locate it in the PDF."
+      : "Found in the paper.";
+  }
+  return params.citationContent
+    ? "Source match incomplete; click to search the paper."
+    : "Source match incomplete.";
+}
+
 function createQuoteCardElement(params: {
   ownerDoc: Document;
   quoteText: string;
@@ -3540,9 +3555,7 @@ function createQuoteCardElement(params: {
   wrapper.dataset.quoteInteractive = interactive ? "true" : "false";
   wrapper.dataset.expanded = interactive ? "false" : "true";
   if (status === "unresolved") {
-    wrapper.title = params.citationContent
-      ? "Source match incomplete; click to search the paper."
-      : "Source match incomplete.";
+    wrapper.title = unresolvedQuoteCardTooltip(params);
   }
   if (params.quoteCitationId) {
     wrapper.dataset.quoteCitationId = params.quoteCitationId;
@@ -3564,7 +3577,7 @@ function createQuoteCardElement(params: {
     if (status === "unresolved" && params.citationContent.nodeType === 1) {
       (params.citationContent as Element).setAttribute(
         "aria-label",
-        "Source match incomplete; click to search the paper.",
+        unresolvedQuoteCardTooltip(params),
       );
     }
     const citation = params.ownerDoc.createElement("span");
@@ -4051,6 +4064,18 @@ export function renderQuoteCitationPlaceholders(params: {
 }): void {
   const display = getMessageQuoteDisplay(params.assistantMessage);
   const plan = buildQuoteRenderPlan(display);
+  if (plan.diagnostics.length) {
+    appLogger.debug("LLM quote render diagnostics", {
+      messageId: params.assistantMessage.id,
+      diagnostics: plan.diagnostics.map((diagnostic) => ({
+        kind: diagnostic.kind,
+        message: diagnostic.message,
+        quoteCitationId: diagnostic.quoteCitationId,
+        citationLabel: diagnostic.citationLabel,
+        quoteText: diagnostic.quoteText?.slice(0, 120),
+      })),
+    });
+  }
   const hasParagraphCitation = /LLMPAPERCITE\d+END/.test(
     params.bubble.textContent || "",
   );

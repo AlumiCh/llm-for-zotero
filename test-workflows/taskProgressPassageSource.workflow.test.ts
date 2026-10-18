@@ -3,10 +3,13 @@
  * paper's PDF in the reader and highlights the passage through the same
  * pipeline a quote card's jump uses; a passage not in the PDF's text falls
  * back to the page its label names; a paper with no PDF says so; a
- * whole-paper read opens the paper at its first page without a search. The
- * card stays as it was (the paper expanded, the drawer open).
+ * whole-paper read opens the paper at its first page without a search. A
+ * quote the answer cites opens in its paper the same way, one quote after
+ * another on one page, from the card's links and from the answer's quote
+ * cards. The card stays as it was (the paper expanded, the drawer open).
  */
 import { assert } from "chai";
+import { buildQuoteCitation } from "../src/services/quotes/quoteCitations";
 import { getReaderContextPanelForTab } from "../src/modules/contextPanel/readerPopupPanelRouting";
 import type {
   WorkflowTestApi,
@@ -16,6 +19,8 @@ import type {
 /** As the PDF's text layer has it: the symbol set in plain text. */
 const SENTENCE =
   "Turnover of dendritic spines s(t) predicts the rate at which place fields reorganize over two weeks of recording in the same animals.";
+/** Also on page 2, after SENTENCE: a second quote with one match there. */
+const SAME_PAGE_SENTENCE = "These changes were stable across sessions.";
 /**
  * As MinerU's Markdown has it: a heading, the symbol in TeX, and the ledger's
  * clip mid-word. Neither the shown nor the stored text is in the PDF as is.
@@ -192,7 +197,7 @@ describe("workflow: task progress passage source", function () {
     const pages = [
       [
         "Introduction. Representational drift has been reported in many areas.",
-        `Results. ${SENTENCE} These changes were stable across sessions.`,
+        `Results. ${SENTENCE} ${SAME_PAGE_SENTENCE}`,
       ],
       [
         "Overview of the figures in this paper.",
@@ -475,6 +480,116 @@ describe("workflow: task progress passage source", function () {
       await until(
         () => readerPageIndex(fullReader) === 0,
         () => `the paper opens at page 1 (${readerPageIndex(fullReader)})`,
+      );
+
+      // 5. Quotes the answer cites: a link under "Cited in answer" opens the
+      // paper at its quote, and the card stays open. The reader is the one
+      // step 1 searched: its last search has one match on page 2, as each
+      // quote here does, so PDF.js's results after each search look like
+      // the ones before it.
+      const cite = (quote: string) =>
+        buildQuoteCitation({
+          quoteText: quote,
+          citationLabel: "(Spine, 2021)",
+          sourceMatchText: quote,
+          sourceMatchKind: "exact",
+          sourceMatchSource: "context-text",
+          itemId: fixtures[0].parentItemId,
+          contextItemId: fixtures[0].pdfAttachmentId,
+        })!;
+      const quoteA = cite(SENTENCE);
+      const quoteB = cite(SAME_PAGE_SENTENCE);
+      await handle.emit({
+        type: "final",
+        text:
+          `> ${SENTENCE}\n\n(Spine, 2021)\n\n[[quote:${quoteA.id}]] ` +
+          `Drift follows turnover.\n\n> ${SAME_PAGE_SENTENCE}\n\n` +
+          `(Spine, 2021)\n\n[[quote:${quoteB.id}]] It persists.`,
+        quoteCitations: [quoteA, quoteB],
+      } as never);
+      const citedLink = (citation: { id: string }): HTMLButtonElement | null =>
+        (paper(fixtures[0].parentItemId)?.querySelector(
+          `.llm-task-paper-citation[data-citation-id="${citation.id}"]`,
+        ) || null) as HTMLButtonElement | null;
+      await until(() => {
+        api.flushTaskProgress();
+        return Boolean(citedLink(quoteA) && citedLink(quoteB));
+      }, "the cited quotes list under their paper");
+      const statusLine = root.querySelector("#llm-status") as HTMLElement;
+      const openCited = async (citation: { id: string }, label: string) => {
+        await until(
+          () => citedLink(citation)?.disabled === false,
+          `${label}: the link is free`,
+        );
+        statusLine.textContent = "";
+        const startedAt = Date.now();
+        citedLink(citation)!.click();
+        await until(
+          () => /^Jumped to the passage/.test(status()),
+          () => `${label}: the quote is highlighted: status "${status()}"`,
+          30000,
+        );
+        assert.equal(status(), "Jumped to the passage (page 2)", label);
+        assert.isBelow(Date.now() - startedAt, 5000, `${label}: no wait`);
+      };
+      await openCited(quoteA, "the first quote");
+      await openCited(quoteB, "a second quote on the same page");
+      await openCited(quoteA, "the first quote again");
+      const citedReader = activeReader();
+      assert.equal(
+        citedReader?.itemID,
+        fixtures[0].pdfAttachmentId,
+        "the reader shows the cited paper",
+      );
+      await until(
+        () => readerPageIndex(citedReader) === 1,
+        () => `the reader shows page 2 (${readerPageIndex(citedReader)})`,
+      );
+      assert.notEqual(
+        (root.querySelector("#llm-task-progress-drawer") as HTMLElement).dataset
+          .state,
+        "closed",
+        "the drawer stays open",
+      );
+      assert.equal(
+        paper(fixtures[0].parentItemId)!
+          .querySelector(".llm-task-paper-summary")
+          ?.getAttribute("aria-expanded"),
+        "true",
+        "the paper stays expanded",
+      );
+
+      // 6. The answer's own quote cards, one after the other on one page.
+      const chip = (quote: string): HTMLElement | null =>
+        (
+          Array.from(
+            root.querySelectorAll(".llm-citation-icon"),
+          ) as HTMLElement[]
+        ).find((node) => (node.title || "").startsWith(quote.slice(0, 30))) ||
+        null;
+      const openChip = async (quote: string, label: string) => {
+        await until(() => Boolean(chip(quote)), `${label}: the card renders`);
+        await until(
+          () => chip(quote)!.dataset.loading !== "true",
+          `${label}: the card is free`,
+        );
+        statusLine.textContent = "";
+        const startedAt = Date.now();
+        chip(quote)!.dispatchEvent(
+          new win.MouseEvent("mousedown", { bubbles: true, button: 0 }),
+        );
+        await until(
+          () => /^Jumped to cited source/.test(status()),
+          () => `${label}: the quote is highlighted: status "${status()}"`,
+          30000,
+        );
+        assert.match(status(), /paragraph matched/, label);
+        assert.isBelow(Date.now() - startedAt, 5000, `${label}: no wait`);
+      };
+      await openChip(SENTENCE, "the first quote card");
+      await openChip(
+        SAME_PAGE_SENTENCE,
+        "a second quote card on the same page",
       );
     } finally {
       handle.finish();

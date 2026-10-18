@@ -14,6 +14,67 @@ export type PaperPromptContext = {
 };
 
 /**
+ * Longest text that gets one passage ID. Full-text-cache and PDFWorker chunks
+ * carry no blank lines, so without this bound a whole ~2,000-character chunk
+ * was one passage and one metadata phrase anywhere in it cost every sentence
+ * its ID. Blank-line paragraphs within the bound stay whole.
+ */
+const MAX_PASSAGE_CHARS = 1000;
+/** A sentence end followed by the start of a new sentence. */
+const SENTENCE_BREAK =
+  /[.!?]["'\u201d\u2019)\]]*\s+(?=["\u201c\u2018([]?\p{Lu})|[\u3002\uff01\uff1f]["'\u201d\u2019\u300d\u300f)\]]*\s*/gu;
+
+/** The cut inside the bound nearest the target, if there is one. */
+function chooseCut(
+  cuts: number[],
+  start: number,
+  target: number,
+): number | undefined {
+  const inBound = cuts.filter(
+    (cut) => cut > start && cut - start <= MAX_PASSAGE_CHARS,
+  );
+  if (inBound.length) {
+    return inBound.reduce((best, cut) =>
+      Math.abs(cut - target) < Math.abs(best - target) ? cut : best,
+    );
+  }
+  return undefined;
+}
+
+/**
+ * Split text longer than the bound into pieces of similar size, at sentence
+ * ends, or at line ends where no sentence ends inside the bound. A single
+ * sentence longer than the bound stays whole. Each piece is source text.
+ */
+function splitLongPassage(text: string): string[] {
+  if (text.length <= MAX_PASSAGE_CHARS) return [text];
+  const sentenceCuts = Array.from(
+    text.matchAll(SENTENCE_BREAK),
+    (match) => (match.index || 0) + match[0].length,
+  ).filter((cut) => cut < text.length);
+  const lineCuts = Array.from(
+    text.matchAll(/\n/g),
+    (match) => (match.index || 0) + 1,
+  ).filter((cut) => cut < text.length);
+  const pieces: string[] = [];
+  let start = 0;
+  while (text.length - start > MAX_PASSAGE_CHARS) {
+    const remaining = text.length - start;
+    const target = start + remaining / Math.ceil(remaining / MAX_PASSAGE_CHARS);
+    const cut =
+      chooseCut(sentenceCuts, start, target) ??
+      chooseCut(lineCuts, start, target) ??
+      sentenceCuts.find((entry) => entry > start) ??
+      lineCuts.find((entry) => entry > start);
+    if (cut === undefined) break;
+    pieces.push(text.slice(start, cut));
+    start = cut;
+  }
+  pieces.push(text.slice(start));
+  return pieces.map((piece) => piece.trim()).filter(Boolean);
+}
+
+/**
  * Source-only prefix: no question, retrieval results, timestamps, or history.
  * The extraction service owns freshness; this layer never caches stale text.
  * Append added papers after the active paper so its prefix remains reusable.
@@ -81,6 +142,7 @@ export async function preparePaperPromptContext(
       const chunkCitations: QuoteCitation[] = [];
       const passage = text
         .split(/\n\s*\n/)
+        .flatMap(splitLongPassage)
         .map((paragraph) => {
           const citation = buildQuoteCitation({
             quoteText: paragraph,
@@ -95,7 +157,9 @@ export async function preparePaperPromptContext(
             sourceFingerprint: meta?.sourceFingerprint,
           });
           if (citation) chunkCitations.push(citation);
-          return `${citation ? `[passage ${citation.id}]` : `[chunk ${index}]`}${meta?.sectionLabel ? ` ${meta.sectionLabel}` : ""}\n${paragraph}`;
+          // No ID-shaped label on a passage without an ID: the model once
+          // patterned [[cite:Q_20_dummy]] on "[chunk 20]".
+          return `${citation ? `[passage ${citation.id}]` : "[no passage ID]"}${meta?.sectionLabel ? ` ${meta.sectionLabel}` : ""}\n${paragraph}`;
         })
         .join("\n\n");
       const cost = estimateTextTokens(passage);
@@ -110,7 +174,7 @@ export async function preparePaperPromptContext(
       ? "Complete extracted paper text follows, in source order."
       : `Partial text: ${included}/${context.chunks.length} chunks fit the context budget. The remaining text is NOT included. For a whole-paper explanation, choose further section reads or full reading to cover the missing material.`;
     result.blocks.push(
-      `${header}${coverage}\nUse the supplied Q_ passage IDs for [[cite:ID]] paragraph citations or [[quote:ID]] reading recommendations. Chunk numbers are not citation IDs.\n\n${passages.join("\n\n")}`,
+      `${header}${coverage}\nUse the supplied Q_ passage IDs for [[cite:ID]] paragraph citations or [[quote:ID]] reading recommendations. To use a passage marked [no passage ID], quote it as a \`>\` blockquote with the source label on the next line and no cite token; never construct an ID.\n\n${passages.join("\n\n")}`,
     );
     result.quoteCitations.push(...citations);
     remaining = Math.max(0, remaining - used);

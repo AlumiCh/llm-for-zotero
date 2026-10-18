@@ -35,10 +35,11 @@ const BALANCED_EVIDENCE_PHRASES = [
   "After a direct quote, do not merely paraphrase it",
   "source labels on their own line belong only after direct blockquotes",
   "Paper titles, headings, author lists, journal names, DOI blocks, and source labels are metadata, not direct evidence",
+  "Use supplied IDs only and never construct one; to quote a passage without an ID, use a `>` blockquote with its source label on the next line and no cite token.",
 ];
 
 const DIRECT_QUOTE_SAFETY_PHRASES = [
-  "copied verbatim in the original source language",
+  "copied verbatim in the original source language, exactly as supplied, including extraction artifacts",
   "put the sourceLabel on the next non-empty line",
   "Do not invent author/year/page/section labels",
   "[[source=...]]",

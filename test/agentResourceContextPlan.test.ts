@@ -393,6 +393,25 @@ describe("agent resource context plan", function () {
     assert.include(userText, "User request:\nWhat should I do next?");
   });
 
+  it("keeps the system prompt identical across conversations with the same scope", async function () {
+    // Provider prefix caches (DeepSeek, Anthropic, OpenAI) only reuse a prompt
+    // whose leading bytes match; a per-conversation value in the system
+    // prompt made every new chat miss the cache after its first ~1.8k tokens.
+    const first = await renderedInitialMessages(
+      request({ conversationKey: 179169157298003 }),
+    );
+    const second = await renderedInitialMessages(
+      request({
+        conversationKey: 179169156507002,
+        userText: "Another question",
+      }),
+    );
+
+    assert.isNotEmpty(stableSystemText(first));
+    assert.equal(allSystemText(second), allSystemText(first));
+    assert.notInclude(allSystemText(first), "179169157298003");
+  });
+
   it("places stable resource context before volatile history and current guidance", async function () {
     const req = request({
       userText: "Current volatile request",

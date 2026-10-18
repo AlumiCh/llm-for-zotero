@@ -2419,6 +2419,27 @@ async function resolveNativeThread(params: {
       }
       return { ...resumedThread, resumed: true };
     } catch (error) {
+      // A stale write is not a provider resume failure. Never archive the
+      // stored thread or start a replacement for it; only an unused
+      // replacement thread may be cleaned up.
+      const staleConversationWrite =
+        areConversationWritesFrozen(params.scope.conversationKey) ||
+        !isConversationWriteGenerationCurrent(
+          params.scope.conversationKey,
+          expectedGeneration,
+        ) ||
+        String((error as Error)?.message || error) ===
+          "Conversation write generation changed";
+      if (staleConversationWrite) {
+        if (replacementThreadId) {
+          await ensureCodexThreadCleanup({
+            proc: params.proc,
+            scope: params.scope,
+            threadId: replacementThreadId,
+          });
+        }
+        throw error;
+      }
       appLogger.warn(
         "Codex app-server native: thread/resume failed; starting a new persistent thread",
         error,

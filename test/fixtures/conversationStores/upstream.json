@@ -3012,6 +3012,7 @@
       "touchEmptyPaperConversation": "function",
       "touchGlobalConversationTitle": "function",
       "touchPaperConversationTitle": "function",
+      "updateAssistantMessageQuoteLocations": "function",
       "updateLatestAssistantMessage": "function",
       "updateLatestUserMessage": "function"
     },

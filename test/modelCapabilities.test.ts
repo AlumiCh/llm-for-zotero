@@ -200,6 +200,99 @@ describe("model capability service", function () {
     assert.isNull(compileReasoningControls(capabilities, { level: "none" }));
   });
 
+  it("omits temperature from a declared control when the model fixes sampling", function () {
+    const registry: ModelCapabilityRegistry = {
+      schemaVersion: 1,
+      revision: 3,
+      models: [
+        {
+          match: { provider: "anthropic", exact: "claude-fixed-sampling" },
+          reasoning: {
+            kind: "select",
+            options: [
+              {
+                id: "none",
+                label: "Off",
+                controls: { body: { thinking: { type: "disabled" } } },
+              },
+            ],
+          },
+          sampling: { temperature: "unsupported" },
+        },
+      ],
+    };
+    assert.isTrue(setModelCapabilityRegistryForTests(registry));
+    const capabilities = getModelCapabilities({
+      provider: "anthropic",
+      model: "claude-fixed-sampling",
+      apiBase: "https://api.anthropic.com/v1",
+      protocol: "anthropic_messages",
+    });
+
+    // The option itself says nothing about temperature; the model's sampling
+    // contract still has to keep it out of the request.
+    assert.deepEqual(
+      compileReasoningControls(capabilities, { level: "none" }),
+      {
+        extra: { thinking: { type: "disabled" } },
+        omitTemperature: true,
+      },
+    );
+  });
+
+  it("knows Claude Haiku 5.5 rejects temperature, and keeps Haiku 4.5 configurable", function () {
+    // https://platform.claude.com/docs/en/build-with-claude/thinking — on
+    // Haiku 5.5 a non-default temperature returns a 400 on every request.
+    const haiku55 = getModelCapabilities({
+      provider: "anthropic",
+      model: "claude-haiku-5-5",
+      apiBase: "https://api.anthropic.com/v1",
+      protocol: "anthropic_messages",
+    });
+    assert.equal(haiku55.sampling.temperature, "unsupported");
+    assert.equal(haiku55.limits.contextWindowTokens, 1_000_000);
+    assert.equal(haiku55.limits.outputTokens, 128_000);
+    // Sampling data must not displace the hand-maintained reasoning profile.
+    assert.equal(haiku55.provenance.reasoning, "legacy");
+    // Haiku 5.5 is the one 5.x model that may switch thinking off.
+    assert.deepEqual(
+      getModelReasoningChoices(haiku55).map((choice) => choice.label),
+      ["Auto", "low", "medium", "high", "max", "Off"],
+    );
+    const opus55 = getModelCapabilities({
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+      apiBase: "https://api.anthropic.com/v1",
+      protocol: "anthropic_messages",
+    });
+    assert.deepEqual(
+      getModelReasoningChoices(opus55).map((choice) => choice.label),
+      ["Auto", "low", "medium", "high", "xhigh", "max"],
+    );
+
+    const haiku45 = getModelCapabilities({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      apiBase: "https://api.anthropic.com/v1",
+      protocol: "anthropic_messages",
+    });
+    assert.equal(haiku45.sampling.temperature, "configurable");
+
+    for (const model of [
+      "claude-haiku-5-5@20261001",
+      "claude-haiku-5-5-20261001",
+    ]) {
+      const dated = getModelCapabilities({
+        provider: "anthropic",
+        model,
+        apiBase: "https://api.anthropic.com/v1",
+        protocol: "anthropic_messages",
+      });
+      assert.equal(dated.sampling.temperature, "unsupported", model);
+      assert.equal(dated.limits.contextWindowTokens, 1_000_000, model);
+    }
+  });
+
   it("uses live model metadata and preserves exact opaque model IDs", async function () {
     configureModelCapabilityRuntime({
       fetch: (async () =>

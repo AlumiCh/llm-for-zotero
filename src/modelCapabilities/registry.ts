@@ -289,7 +289,7 @@ function normalized(value: unknown): string {
 function matchesPrefix(value: string, prefix: string): boolean {
   if (!value.startsWith(prefix)) return false;
   const next = value[prefix.length];
-  return !next || /[._:/-]/.test(next);
+  return !next || /[._:/@-]/.test(next);
 }
 
 export function findRegistryEntry(

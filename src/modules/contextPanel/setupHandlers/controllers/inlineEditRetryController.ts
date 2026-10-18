@@ -6,6 +6,7 @@ import type {
   NoteContextRef,
   TagContextRef,
 } from "../../types";
+import { resolvePromptText } from "../../textUtils";
 
 export type InlineEditRetryContextSnapshot = {
   selectedTexts: string[];
@@ -41,4 +42,19 @@ export function buildInlineEditRetryContextSnapshot(params: {
       ? params.selectedTagContexts.slice()
       : [],
   };
+}
+
+/**
+ * The text an inline edit submits; "" means there is nothing to submit.
+ * Typed composer text wins. With an empty composer, the questions on the
+ * current chips make a valid edit, as in an empty-composer send
+ * (resolvePromptText); chips without questions do not.
+ */
+export function resolveInlineEditSubmitText(
+  composerText: string,
+  selectedContexts?: readonly SelectedTextContext[],
+): string {
+  const typed = composerText.trim();
+  if (typed) return typed;
+  return resolvePromptText("", "", false, selectedContexts);
 }

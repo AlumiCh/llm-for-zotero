@@ -11,6 +11,8 @@ import {
   openDeclaredOutcomes,
   outcomeProgressSignature,
 } from "../loop/outcomes";
+import { settledTargetCount } from "../loop/longJob";
+import { OPEN_PARTS_REASK_LIMIT } from "../loop/turnBoundary";
 
 export type AgentFinalAnswerToolRecord = {
   name: string;
@@ -20,6 +22,8 @@ export type AgentFinalAnswerToolRecord = {
   actionReceipts?: readonly AgentActionReceipt[];
   input?: unknown;
   content?: unknown;
+  /** For paper_read: whether the read added evidence the turn lacked. */
+  frontier?: "advanced" | "unchanged" | "unavailable";
 };
 
 export type AgentFinalAnswerDecision =
@@ -48,6 +52,14 @@ export class AgentFinalAnswerController {
   private readonly literatureReviewCorrections = new Set<string>();
   /** The ledger's progress when the last outcome correction was given. */
   private outcomeCorrectionSignature?: string;
+  /**
+   * Outcome corrections given since a paper last settled, capped at
+   * OPEN_PARTS_REASK_LIMIT; a long job that settles papers between them
+   * starts a new count, as it restarts the safety limits.
+   */
+  private outcomeCorrections = 0;
+  /** The settled papers when the last outcome correction was given. */
+  private outcomeCorrectionSettled = 0;
 
   constructor(private readonly request: AgentRuntimeRequest) {}
 
@@ -55,6 +67,11 @@ export class AgentFinalAnswerController {
     candidateText: string;
     canCorrect: boolean;
     toolExecutionRecords: readonly AgentFinalAnswerToolRecord[];
+    /**
+     * The answer was asked for without tools after the search ran out: no
+     * correction can send it back to work.
+     */
+    finalOnly?: boolean;
   }): Promise<AgentFinalAnswerDecision> {
     const unverifiableWrite = params.toolExecutionRecords.find(
       (record) =>
@@ -75,7 +92,8 @@ export class AgentFinalAnswerController {
       };
     }
 
-    const outcomeCorrection = this.openOutcomeCorrection(params.canCorrect);
+    const canCorrect = params.canCorrect && !params.finalOnly;
+    const outcomeCorrection = this.openOutcomeCorrection(canCorrect);
     if (outcomeCorrection) {
       return { kind: "correct", correction: outcomeCorrection };
     }
@@ -110,10 +128,7 @@ export class AgentFinalAnswerController {
         | { sessionId?: string; revision?: number }
         | undefined;
       const correctionKey = `${pending?.sessionId || "discovery"}:${pending?.revision || 0}`;
-      if (
-        params.canCorrect &&
-        !this.literatureReviewCorrections.has(correctionKey)
-      ) {
+      if (canCorrect && !this.literatureReviewCorrections.has(correctionKey)) {
         this.literatureReviewCorrections.add(correctionKey);
         return {
           kind: "correct",
@@ -153,8 +168,14 @@ export class AgentFinalAnswerController {
    * given again only after new evidence moved the ledger since the last one.
    */
   private openOutcomeCorrection(canCorrect: boolean): string | undefined {
-    if (!canCorrect) return undefined;
     const checkpoint = this.request.executionCheckpoint;
+    const settled = settledTargetCount(checkpoint);
+    if (settled > this.outcomeCorrectionSettled) {
+      this.outcomeCorrectionSettled = settled;
+      this.outcomeCorrections = 0;
+    }
+    if (!canCorrect || this.outcomeCorrections >= OPEN_PARTS_REASK_LIMIT)
+      return undefined;
     const open = openDeclaredOutcomes(checkpoint).filter(
       (task) => task.effect !== "artifact",
     );
@@ -162,6 +183,7 @@ export class AgentFinalAnswerController {
     const signature = outcomeProgressSignature(checkpoint);
     if (signature === this.outcomeCorrectionSignature) return undefined;
     this.outcomeCorrectionSignature = signature;
+    this.outcomeCorrections += 1;
     const parts = open.map((task) => `“${task.description}”`).join("; ");
     return `Before answering, finish the parts of this request you declared that are still open: ${parts}. Do them now with the tools. If one cannot be done, list it under task_update's skipped or blocked with the reason, then answer.`;
   }

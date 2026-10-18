@@ -3,6 +3,7 @@
  *
  * Provides streaming and non-streaming API calls to OpenAI-compatible endpoints.
  */
+import { providerHttpError } from "./retryAfter";
 
 import { appLogger } from "../core/logging";
 import { config } from "../../package.json";
@@ -2311,6 +2312,39 @@ function buildReasoningControlPayload(
   providerProtocol?: ProviderProtocol,
   options?: ReasoningPayloadOptions,
 ): { extra: Record<string, unknown>; omitTemperature: boolean } {
+  const payload = buildProviderReasoningControlPayload(
+    reasoning,
+    useResponses,
+    modelName,
+    apiBase,
+    providerProtocol,
+    options,
+  );
+  // One owner: a model whose registry entry forbids a temperature never gets
+  // one, whichever provider branch built the reasoning controls.
+  if (payload.omitTemperature) return payload;
+  const capabilities = getModelCapabilities({
+    provider: reasoning?.provider,
+    model: modelName || "",
+    apiBase,
+    protocol:
+      providerProtocol ||
+      (useResponses ? "responses_api" : "openai_chat_compat"),
+    profileOverride: options?.profileOverride,
+  });
+  return capabilities.sampling.temperature !== "configurable"
+    ? { ...payload, omitTemperature: true }
+    : payload;
+}
+
+function buildProviderReasoningControlPayload(
+  reasoning: ReasoningConfig | undefined,
+  useResponses: boolean,
+  modelName?: string,
+  apiBase?: string,
+  providerProtocol?: ProviderProtocol,
+  options?: ReasoningPayloadOptions,
+): { extra: Record<string, unknown>; omitTemperature: boolean } {
   const exactEffort = reasoning?.effort?.trim();
   if (
     exactEffort &&
@@ -3790,9 +3824,7 @@ async function postWithTemperatureFallback(params: {
       return res;
     }
     const secondErr = await res.text();
-    throw new Error(
-      `${res.status} ${res.statusText} (${params.url}) - ${secondErr}`,
-    );
+    throw providerHttpError(res, params.url, secondErr);
   }
   const retryCapKey = findOutputCapKey(requestPayload);
   const capRecovery = retryCapKey
@@ -3824,14 +3856,10 @@ async function postWithTemperatureFallback(params: {
       return res;
     }
     const secondErr = await res.text();
-    throw new Error(
-      `${res.status} ${res.statusText} (${params.url}) - ${secondErr}`,
-    );
+    throw providerHttpError(res, params.url, secondErr);
   }
 
-  throw new Error(
-    `${res.status} ${res.statusText} (${params.url}) - ${firstErr}`,
-  );
+  throw providerHttpError(res, params.url, firstErr);
 }
 
 export function parseStatusFromErrorMessage(message: string): number | null {

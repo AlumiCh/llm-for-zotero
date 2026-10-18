@@ -23,6 +23,8 @@ import {
   RRF_K,
 } from "../retrieval/constants";
 import {
+  toRetrievalIndexTerm,
+  toRetrievalIndexTerms,
   tokenizeRetrievalQuery,
   tokenizeRetrievalText,
 } from "../retrieval/retrievalTokenizer";
@@ -80,6 +82,8 @@ import {
 } from "./textAttachmentExtraction";
 import type { TextAttachmentSourceMode } from "./contextAttachmentTypes";
 import { isPdfContextAttachment } from "./contextAttachmentSupport";
+import { seedPageTextCacheFromFullText } from "../pdf/livePdfSelectionLocator";
+import { readAttachmentFileState } from "../../utils/attachmentFileState";
 import { isBodyEvidenceSection } from "../../shared/libraryChatEvidencePolicy";
 import {
   extractDocumentReferenceEvidence,
@@ -451,6 +455,11 @@ async function cachePDFText(
     // 2. Fallback to Zotero.PDFWorker
     const tryPdfWorker = async (pdfItem: Zotero.Item) => {
       try {
+        // The file as this read finds it: page text seeded from the read is
+        // dropped once the PDF is replaced.
+        const fileState = options?.preferFulltextCache
+          ? null
+          : await readAttachmentFileState(pdfItem);
         const result = await Zotero.PDFWorker.getFullText(pdfItem.id);
         if (result && result.text) {
           pdfText = result.text;
@@ -463,6 +472,17 @@ async function cachePDFText(
           )
             ? rawPageChars
             : undefined;
+          // Quote checks need this same text split into pages. Hand it over
+          // instead of letting the quote warm extract the PDF a second time.
+          // Background library indexing reads papers no chat is quoting and
+          // would only evict the pages a chat needs.
+          if (!options?.preferFulltextCache) {
+            void seedPageTextCacheFromFullText(pdfItem.id, result, {
+              fileState,
+            }).catch((error) => {
+              appLogger.debug("LLM: PDF page text seed failed", error);
+            });
+          }
         }
       } catch (e) {
         appLogger.warn("PDF extraction failed:", e);
@@ -1734,10 +1754,15 @@ export function formatSuggestedEvidenceCitation(
   return `(${citationParts.join(", ")})`;
 }
 
+/** A chunk's BM25 terms: index terms (stems of plain English words). */
 function tokenizeText(text: string): string[] {
-  return tokenizeRetrievalText(text);
+  return tokenizeRetrievalText(text, { stem: true });
 }
 
+/**
+ * BM25 term statistics per chunk. `tf` and `docFreq` are keyed by index
+ * terms (`toRetrievalIndexTerm`), so look a surface query term up through it.
+ */
 export function buildChunkIndex(chunks: string[]): {
   chunkStats: ChunkStat[];
   docFreq: Record<string, number>;
@@ -1781,9 +1806,16 @@ function queryPlanTerms(
     : tokenizeQuery(question);
 }
 
+/**
+ * The query variants a chunk matches: the whole variant as a substring, or
+ * one of its terms as a substring or (the BM25 rule) through a shared index
+ * term in the chunk's `tf`, so a chunk BM25 ranked for "error" also names
+ * the variant that asked about "errors".
+ */
 function matchedQueryVariantsForText(
   text: string,
   queryPlan: RetrievalQueryPlan | undefined,
+  chunkTf?: Record<string, number>,
 ): string[] {
   if (!queryPlan?.effectiveQueries.length || !text.trim()) return [];
   const haystack = text.toLocaleLowerCase();
@@ -1795,13 +1827,26 @@ function matchedQueryVariantsForText(
       continue;
     }
     const terms = tokenizeQuery(query);
-    if (terms.length && terms.some((term) => haystack.includes(term))) {
+    if (
+      terms.length &&
+      terms.some(
+        (term) =>
+          haystack.includes(term) ||
+          Boolean(chunkTf?.[toRetrievalIndexTerm(term)]),
+      )
+    ) {
       matches.push(query);
     }
   }
   return Array.from(new Set(matches));
 }
 
+/**
+ * BM25 of one chunk for surface query terms (`lexicalTerms`, or
+ * `tokenizeRetrievalQuery` output). They are mapped to their distinct index
+ * terms here, the keys of `buildChunkIndex`; never pass stems, which would be
+ * stemmed again.
+ */
 export function scoreChunkBM25(
   chunk: ChunkStat,
   terms: string[],
@@ -1814,7 +1859,7 @@ export function scoreChunkBM25(
   const b = 0.75;
   let score = 0;
 
-  for (const term of terms) {
+  for (const term of toRetrievalIndexTerms(terms)) {
     const tf = chunk.tf[term] || 0;
     if (!tf) continue;
     const df = docFreq[term] || 0;
@@ -2273,11 +2318,18 @@ function shouldTryEmbeddings(): boolean {
  * `body` and `unknown` never move — a prior may break a tie, it may not
  * decide the order (reciprocal-rank fusion spans ~0.03 in total, so the old
  * additive constants of 0.8–1.5 overruled relevance outright).
+ *
+ * Captions and appendices are not demoted. Their kinds come from the text
+ * heuristic (a chunk that starts "Figure 2:", or any mention of "appendix"),
+ * and PDF text runs a caption straight into the body paragraph after it, so a
+ * demoted "caption" was often the passage that held the answer. An offline
+ * replay over QASPER-200 found more gold evidence without the demotion
+ * (scripts/qasper-evidence-replay.ts).
  */
 const SECTION_BOOST_PROFILE: { boost: PdfChunkKind[]; demote: PdfChunkKind[] } =
   {
     boost: ["abstract", "results", "discussion", "conclusion"],
-    demote: ["figure-caption", "table-caption", "appendix", "references"],
+    demote: ["references"],
   };
 
 /** Ranks a boosted section kind can climb. */
@@ -2293,9 +2345,10 @@ const DEMOTED_PRIOR: SectionPrior = { priorShift: 0, demoted: true };
 const NEUTRAL_PRIOR: SectionPrior = { priorShift: 0 };
 
 /**
- * Bounded section prior: a rank shift, not a score. Demoted chunks carry
- * `demoted: true` and sort to the end; they stay candidates so a
- * reference-locked read can still pull a caption or a reference entry back.
+ * Bounded section prior: a rank shift, not a score. Demoted chunks (reference
+ * lists and chunks under MIN_EVIDENCE_WORD_COUNT words) carry `demoted: true`
+ * and sort to the end; they stay candidates so a reference-locked read can
+ * still pull a reference entry back.
  */
 function priorShiftFor(params: {
   chunkText: string;
@@ -2754,6 +2807,7 @@ export async function buildPaperRetrievalCandidates(
     const matchedQueryVariants = matchedQueryVariantsForText(
       chunks[chunk.index],
       queryPlan,
+      chunk.tf,
     );
     const candidate: PaperContextCandidate = {
       paperKey: buildPaperKey(paperContext),

@@ -1,4 +1,4 @@
-import { resolveLiveAgentCredentials } from "../test-live-agent/liveAgentCredentials";
+import { resolveLiveAgentCredentials } from "../test-live/agent/liveAgentCredentials";
 import {
   getConversationSystemPref,
   setConversationSystemPref,

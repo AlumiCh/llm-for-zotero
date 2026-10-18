@@ -28,6 +28,12 @@ export const FULL_READ_BATCH_CONCURRENCY = 3;
  */
 export const FULL_READ_RATE_LIMIT_BACKOFF_MS = 10_000;
 
+/**
+ * Output tokens a batch digest may use, excluding any reasoning reserve. A
+ * digest cut off at this budget is retried once at twice the budget.
+ */
+const BATCH_DIGEST_MAX_TOKENS = 700;
+
 export type ExhaustiveReadStatus = "complete" | "partial" | "unreadable";
 
 const NO_EXTRACTABLE_TEXT_COVERAGE = "no extractable text";
@@ -52,6 +58,8 @@ export type ExhaustiveBatchInput = {
   question: string;
   chunks: ExhaustiveSourceChunk[];
   signal?: AbortSignal;
+  /** Digest output budget; defaults to BATCH_DIGEST_MAX_TOKENS. */
+  maxTokens?: number;
 };
 
 export type ExhaustiveBatchOutput = {
@@ -250,7 +258,7 @@ export function createExhaustiveBatchAnalyzer(
         "",
         source,
       ].join("\n"),
-      maxTokens: 700,
+      maxTokens: input.maxTokens ?? BATCH_DIGEST_MAX_TOKENS,
       temperature: 0,
       signal: input.signal,
       systemMessages: [
@@ -546,6 +554,13 @@ function isRateLimited(error: unknown): boolean {
   );
 }
 
+/** `requireCompleteModelText` names the reason a call stopped short. */
+function isOutputLimited(error: unknown): boolean {
+  return /\(output_limit\)/.test(
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
 async function analyzeWithRetries(params: {
   analyzer: ExhaustiveBatchAnalyzer;
   input: ExhaustiveBatchInput;
@@ -554,12 +569,18 @@ async function analyzeWithRetries(params: {
   onRateLimited: () => Promise<void>;
 }): Promise<ExhaustiveBatchOutput> {
   let lastError: unknown;
+  let input = params.input;
   for (let attempt = 0; attempt <= params.retryCount; attempt += 1) {
     try {
-      return await params.analyzer(params.input);
+      return await params.analyzer(input);
     } catch (error) {
       lastError = error;
       if (params.input.signal?.aborted) throw error;
+      // The same budget truncates the same digest again, so the retry gets
+      // twice the room, once.
+      if (isOutputLimited(error) && input.maxTokens === undefined) {
+        input = { ...input, maxTokens: BATCH_DIGEST_MAX_TOKENS * 2 };
+      }
       if (attempt < params.retryCount && isRateLimited(error)) {
         await params.onRateLimited();
         if (params.input.signal?.aborted) throw error;

@@ -2438,10 +2438,8 @@ describe("semantic tool surface", function () {
 
     assert.lengthOf(output.quoteCitations || [], 1);
     assert.equal(output.quoteCitations?.[0]?.quoteText, substantiveSentence);
-    assert.equal(
-      output.quoteCitations?.[0]?.sourceMatchSource,
-      "pdf-page-text",
-    );
+    // Tool text is not PDF page text: the page is kept only as a hint.
+    assert.equal(output.quoteCitations?.[0]?.sourceMatchSource, "context-text");
     assert.equal(output.quoteCitations?.[0]?.pageHintIndex, 4);
     assert.notInclude(
       output.quoteCitations?.map((citation) => citation.quoteText).join("\n"),

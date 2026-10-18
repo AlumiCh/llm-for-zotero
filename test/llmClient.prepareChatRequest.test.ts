@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   callEmbeddings,
   callLLM,
+  buildReasoningPayload,
   callLLMStream,
   getResolvedEmbeddingConfig,
   prepareChatRequest,
@@ -688,6 +689,64 @@ describe("llmClient prepareChatRequest", function () {
     assert.notProperty(capturedBody || {}, "thinking");
     assert.notProperty(capturedBody || {}, "output_config");
     assert.equal(capturedBody?.temperature, 0.3);
+  });
+
+  it("never sends temperature to Claude Haiku 5.5, with or without thinking off", async function () {
+    const bodies: Array<Record<string, unknown>> = [];
+    mockFetch(async (_url, init) => {
+      bodies.push(
+        JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+      );
+      return anthropicOkStream();
+    });
+
+    for (const reasoning of [
+      undefined,
+      { provider: "anthropic" as const, level: "none" as const },
+    ]) {
+      await callLLMStream(
+        {
+          prompt: "Say ok.",
+          model: "claude-haiku-5-5",
+          apiBase: "https://api.anthropic.com/v1",
+          apiKey: "anthropic-test",
+          providerProtocol: "anthropic_messages",
+          temperature: 0,
+          reasoning,
+        },
+        () => undefined,
+      );
+    }
+
+    assert.lengthOf(bodies, 2);
+    assert.notProperty(bodies[0], "temperature");
+    assert.notProperty(bodies[0], "thinking");
+    assert.notProperty(bodies[1], "temperature");
+    assert.deepEqual(bodies[1].thinking, { type: "disabled" });
+  });
+
+  it("omits temperature for Haiku 5.5 snapshot IDs and non-Messages routes", function () {
+    for (const model of [
+      "claude-haiku-5-5@20261001",
+      "claude-haiku-5-5-20261001",
+    ]) {
+      const payload = buildReasoningPayload(
+        { provider: "anthropic", level: "none" },
+        false,
+        model,
+        "https://api.anthropic.com/v1",
+        "anthropic_messages",
+      );
+      assert.isTrue(payload.omitTemperature, model);
+    }
+    const viaOpenRouter = buildReasoningPayload(
+      { provider: "anthropic", level: "low" },
+      false,
+      "anthropic/claude-haiku-5-5",
+      "https://openrouter.ai/api/v1",
+      "openai_chat_compat",
+    );
+    assert.isTrue(viaOpenRouter.omitTemperature);
   });
 
   it("sends OpenAI prompt cache hints for cache-aware full context", async function () {

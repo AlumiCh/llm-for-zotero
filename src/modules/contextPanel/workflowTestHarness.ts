@@ -54,6 +54,7 @@ import {
   exerciseLongJobNoteResume,
   exerciseLongJobReplay,
 } from "./longJobReplay";
+import { exerciseAgentStopRules } from "./stopRulesReplay";
 import { mountPanelShell } from "./panelMount";
 import { getAgentRuntime } from "../../agent";
 import { normalizeExecutionOutput } from "../../agent/tools/execution/results";
@@ -132,6 +133,10 @@ import { readCodexPermissionStatePref } from "../../codexAppServer/prefs";
 import { forcePendingTurnFinalizeFailuresForTests } from "./pendingDeletionWiring";
 import { forceWebChatSessionAnchorFailuresForTests } from "./webchatSessionConversation";
 import {
+  forceInPlacePaperSwitchFailuresForTests,
+  getForcedInPlacePaperSwitchFailuresForTests,
+} from "./inPlacePaperSwitch";
+import {
   pendingDeletionStore,
   PENDING_DELETIONS_TABLE,
 } from "../../core/conversations/pendingDeletionStore";
@@ -152,9 +157,13 @@ import {
 import { getAdvancedModelParamsForEntry } from "./prefHelpers";
 import { loadUsageEventsForConversation } from "../../utils/usageStore";
 import {
+  addSelectedTextContext,
+  appendSelectedTextContextForItem,
   applySelectedTextPreview,
   getSelectedTextContextEntries,
   resolveContextSourceItemAsync,
+  setSelectedTextContextEntries,
+  setSelectedTextExpandedIndex,
 } from "./contextResolution";
 import {
   resolveConversationBaseItem,
@@ -187,6 +196,8 @@ import {
   loadConversation,
 } from "../../utils/chatStore";
 import { appendCodexMessage } from "../../codexAppServer/store";
+import { setCodexAppServerModelCatalogLoaderForTests } from "../../codexAppServer/modelCatalog";
+import type { WorkflowTestCodexModelCatalogResponse } from "./workflowTestTypes";
 import { appendClaudeMessage } from "../../claudeCode/store";
 import {
   ensureMarkedReaderSelectionTrackingListener,
@@ -202,6 +213,7 @@ import {
 import type { RuntimeConversationSystem } from "./runtimeSystemControls";
 import { collectReaderSelectionDocuments } from "../../services/pdf/readerSelection";
 import { getReaderContextPanelForTab } from "./readerPopupPanelRouting";
+import { closeReaderSelectionPromptOverlay } from "./selectionPrompt/readerSelectionPromptOverlay";
 import type { ConversationSystem } from "../../shared/types";
 import { clearPaperRestoreTargetsForWorkflowTests } from "../../shared/paperConversationRestore";
 import { relayGetStateSnapshot } from "../../webchat/relayServer";
@@ -230,6 +242,29 @@ import {
 } from "../../codexAppServer/state";
 
 let resolveDelayedCodexPermissionCatalog: (() => void) | null = null;
+let resolveDelayedCodexModelCatalog: (() => void) | null = null;
+let codexModelCatalogRequests: string[] = [];
+
+function configureCodexModelCatalogs(
+  responses: WorkflowTestCodexModelCatalogResponse[],
+): void {
+  assertWorkflowTestEnabled();
+  codexModelCatalogRequests = [];
+  setCodexAppServerModelCatalogLoaderForTests(async ({ codexPath }) => {
+    const response =
+      responses[
+        Math.min(codexModelCatalogRequests.length, responses.length - 1)
+      ];
+    codexModelCatalogRequests.push(codexPath || "");
+    if (response?.delayed) {
+      await new Promise<void>((resolve) => {
+        resolveDelayedCodexModelCatalog = resolve;
+      });
+    }
+    if (response?.error) throw new Error(response.error);
+    return { models: response?.models || [] };
+  });
+}
 
 function configurePermissionCatalogs(input?: {
   delayFirstCodex?: boolean;
@@ -3992,6 +4027,23 @@ async function getConversationHistoryTexts(
   };
 }
 
+async function seedStoredConversationTurns(
+  conversationKey: number,
+  turns: Array<{ role: "user" | "assistant"; text: string; timestamp: number }>,
+): Promise<void> {
+  assertWorkflowTestEnabled();
+  for (const turn of turns) {
+    await appendWorkflowStoredMessage("upstream", conversationKey, turn);
+  }
+  // A conversation the panel already loaded is served from memory.
+  if (loadedConversationKeys.has(conversationKey)) {
+    chatHistory.set(conversationKey, [
+      ...(chatHistory.get(conversationKey) || []),
+      ...turns,
+    ]);
+  }
+}
+
 async function seedStandaloneConversation(
   turns: Array<{ role: "user" | "assistant"; text: string } & Partial<Message>>,
 ): Promise<WorkflowTestStandaloneDiagnostics> {
@@ -4542,6 +4594,25 @@ async function closeWorkflowReader(
   }
 }
 
+/**
+ * The reader UI document (resource://zotero/reader/reader.html). Zotero
+ * renders the text selection popup there and passes it as the
+ * renderTextSelectionPopup event's `doc`; the PDF text itself lives in a
+ * nested view iframe (viewer.html).
+ */
+function getWorkflowReaderUiDocument(
+  reader: _ZoteroTypes.ReaderInstance,
+): Document {
+  const candidate = reader as unknown as {
+    _iframeWindow?: Window | null;
+    _iframe?: HTMLIFrameElement | null;
+  };
+  const doc =
+    candidate._iframeWindow?.document || candidate._iframe?.contentDocument;
+  if (!doc) throw new Error("Workflow reader UI document is unavailable");
+  return doc;
+}
+
 async function dispatchWorkflowReaderAddTextPopup(input: {
   reader: _ZoteroTypes.ReaderInstance;
   pageIndex: number;
@@ -4549,12 +4620,16 @@ async function dispatchWorkflowReaderAddTextPopup(input: {
 }): Promise<{
   addTextButtonLabel: string;
   popupHost: HTMLElement;
+  /** The view document that holds the PDF text selection. */
   selectionDoc: Document;
+  /** The reader UI document that hosts the popup, as in production. */
+  popupDoc: Document;
 }> {
   const selected = await selectWorkflowPdfText(input);
-  const popupHost = selected.doc.createElement("div");
+  const popupDoc = getWorkflowReaderUiDocument(input.reader);
+  const popupHost = popupDoc.createElement("div");
   popupHost.dataset.workflowAddTextPopup = "true";
-  (selected.doc.body || selected.doc.documentElement).appendChild(popupHost);
+  (popupDoc.body || popupDoc.documentElement).appendChild(popupHost);
 
   const readerApi = Zotero.Reader as unknown as ReaderSelectionTrackingReader<
     _ZoteroTypes.Reader.EventHandler<"renderTextSelectionPopup">
@@ -4566,7 +4641,7 @@ async function dispatchWorkflowReaderAddTextPopup(input: {
   }
   await handler({
     reader: input.reader,
-    doc: selected.doc,
+    doc: popupDoc,
     params: {
       annotation: {
         text: input.selectedText,
@@ -4583,22 +4658,25 @@ async function dispatchWorkflowReaderAddTextPopup(input: {
     popupHost.remove();
     throw new Error("Add Text button was not rendered in the reader popup");
   }
-  const PointerEventCtor = selected.doc.defaultView?.MouseEvent;
-  if (!PointerEventCtor) {
+  const popupWindow = popupDoc.defaultView;
+  if (!popupWindow?.MouseEvent) {
     popupHost.remove();
     throw new Error("Workflow reader window does not expose MouseEvent");
   }
   addTextButton.dispatchEvent(
-    new PointerEventCtor("pointerdown", {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-    }),
+    new popupWindow.MouseEvent(
+      "pointerdown",
+      cloneEventInitIntoWindow(
+        { bubbles: true, cancelable: true, button: 0 },
+        popupWindow,
+      ),
+    ),
   );
   return {
     addTextButtonLabel: addTextButton.textContent?.trim() || "",
     popupHost,
     selectionDoc: selected.doc,
+    popupDoc,
   };
 }
 
@@ -4785,6 +4863,660 @@ async function exerciseReaderPopupStandaloneRouting(input: {
   }
 }
 
+/**
+ * The reader's documents (reader.html and the PDF view's viewer.html, both
+ * resource://zotero/reader/) are content windows: their event constructors
+ * read nothing from an init object made here (key "", bubbles and
+ * cancelable false). Clone the init into the window first.
+ */
+function cloneEventInitIntoWindow<T extends object>(init: T, win: Window): T {
+  const scope = globalThis as unknown as {
+    cloneInto?: (value: T, target: Window) => T;
+    Components?: {
+      utils?: { cloneInto?: (value: T, target: Window) => T };
+    };
+  };
+  const cloneInto = scope.cloneInto || scope.Components?.utils?.cloneInto;
+  return cloneInto ? cloneInto(init, win) : init;
+}
+
+type WorkflowReaderKeyState = {
+  tool: string;
+  selectedAnnotationCount: number;
+};
+
+/** The reader state that its keyboard shortcuts change. */
+function readWorkflowReaderKeyState(
+  reader: _ZoteroTypes.ReaderInstance,
+): WorkflowReaderKeyState {
+  const state = (
+    reader as unknown as {
+      _internalReader?: {
+        _state?: {
+          tool?: { type?: string; color?: string } | null;
+          selectedAnnotationIDs?: unknown[];
+        };
+      };
+    }
+  )._internalReader?._state;
+  return {
+    tool: `${state?.tool?.type || ""}:${state?.tool?.color || ""}`,
+    selectedAnnotationCount: state?.selectedAnnotationIDs?.length ?? -1,
+  };
+}
+
+const READER_PROMPT_OVERLAY_SELECTOR =
+  '[data-llm-reader-selection-prompt="true"]';
+const READER_PROMPT_EDITOR_SELECTOR = `${READER_PROMPT_OVERLAY_SELECTOR} [data-llm-reader-selection-prompt-editor="true"]`;
+
+/** Puts the workflow panel first in the reader tab's pane, so routing picks it. */
+function mountWorkflowPanelInReaderPane(
+  panel: PanelRecord,
+  reader: _ZoteroTypes.ReaderInstance,
+): void {
+  const mainDocument = Zotero.getMainWindow?.()?.document || null;
+  const readerPanel = mainDocument
+    ? getReaderContextPanelForTab(mainDocument, reader.tabID)
+    : null;
+  if (!readerPanel) {
+    throw new Error("Workflow reader tab does not expose a context panel");
+  }
+  readerPanel.insertBefore(panel.body, readerPanel.firstChild);
+}
+
+async function waitForReaderPromptEditor(
+  popupDoc: Document,
+): Promise<HTMLElement | null> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 2000) {
+    const editor = popupDoc.querySelector(
+      READER_PROMPT_EDITOR_SELECTOR,
+    ) as HTMLElement | null;
+    if (editor) return editor;
+    await Zotero.Promise.delay(25);
+  }
+  return null;
+}
+
+/** What the open reader box shows: the quoted selection and its labels. */
+function readReaderPromptBox(popupDoc: Document): {
+  quoteText: string;
+  quoteLabel: string;
+  buttonLabel: string;
+} {
+  const overlay = popupDoc.querySelector(READER_PROMPT_OVERLAY_SELECTOR);
+  return {
+    quoteText:
+      overlay?.querySelector('[data-llm-reader-selection-prompt-quote="true"]')
+        ?.textContent || "",
+    quoteLabel:
+      overlay?.querySelector(
+        '[data-llm-reader-selection-prompt-quote-label="true"]',
+      )?.textContent || "",
+    buttonLabel: overlay?.querySelector("button")?.textContent?.trim() || "",
+  };
+}
+
+/** A keydown built in the reader window's scope (see cloneEventInitIntoWindow). */
+function makeReaderPromptKey(
+  popupDoc: Document,
+  init: KeyboardEventInit,
+): KeyboardEvent {
+  const readerWindow = popupDoc.defaultView;
+  if (!readerWindow?.KeyboardEvent) {
+    throw new Error("Workflow reader window does not expose KeyboardEvent");
+  }
+  return new readerWindow.KeyboardEvent(
+    "keydown",
+    cloneEventInitIntoWindow(
+      { bubbles: true, cancelable: true, ...init },
+      readerWindow,
+    ),
+  );
+}
+
+/** Types `text` into the reader box and presses Enter. */
+function submitReaderPrompt(
+  popupDoc: Document,
+  editor: HTMLElement,
+  text: string,
+): void {
+  editor.textContent = text;
+  editor.dispatchEvent(
+    makeReaderPromptKey(popupDoc, { key: "Enter", code: "Enter" }),
+  );
+}
+
+/** Waits `ms` and reports whether a send reached the interceptor meanwhile. */
+async function sentWithin(ms: number): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < ms) {
+    if (lastSend) return true;
+    await Zotero.Promise.delay(25);
+  }
+  return lastSend !== null;
+}
+
+/** Records sends without a network call (the provider boundary stand-in). */
+function installRecordingSendInterceptor(): void {
+  lastSend = null;
+  setWorkflowTestSendInterceptor((opts) => {
+    lastSend = opts;
+    // A send that never dispatches is a failed send; the send flow would
+    // then restore the prompt into the composer.
+    opts.onProviderDispatch?.();
+  });
+}
+
+/**
+ * Lets the next send run through the real sendQuestion, so the user turn is
+ * rendered, and stops it at the provider boundary (no network). Returns the
+ * restore step for the final-request interceptor.
+ */
+function installRenderingSendInterceptor(): () => void {
+  const previousFinalRequestInterceptor =
+    getWorkflowTestFinalRequestInterceptor();
+  lastSend = null;
+  lastFinalRequest = null;
+  setWorkflowTestSendInterceptor((opts) => {
+    opts.apiBase = "http://127.0.0.1:9/v1";
+    opts.apiKey = "workflow-test-key";
+    opts.authMode = "api_key";
+    lastSend = opts;
+    return true;
+  });
+  setWorkflowTestFinalRequestInterceptor((snapshot) => {
+    lastFinalRequest = snapshot;
+    return true;
+  });
+  return () =>
+    setWorkflowTestFinalRequestInterceptor(previousFinalRequestInterceptor);
+}
+
+/**
+ * Waits for the newest user turn that shows `selectedText` as a chip, then
+ * reads its visible body text and the questions in its expanded chip bars.
+ */
+async function readSentUserBubble(
+  body: Element,
+  selectedText: string,
+  timeoutMs = 5000,
+): Promise<{
+  sentBubbleBodyText: string;
+  sentBubbleChipQuestions: string[];
+  sentBubbleBarCount: number;
+}> {
+  const win = body.ownerDocument?.defaultView;
+  const isShown = (element: Element | null): element is HTMLElement => {
+    if (!element) return false;
+    const html = element as HTMLElement;
+    if (html.hidden) return false;
+    return win?.getComputedStyle(html)?.display !== "none";
+  };
+  const findWrapper = (): HTMLElement | null => {
+    const wrappers = Array.from(
+      body.querySelectorAll("#llm-chat-box .llm-message-wrapper.user"),
+    ) as HTMLElement[];
+    for (const wrapper of wrappers.reverse()) {
+      // A chip without a question shows a bar; one with a question shows
+      // only its card.
+      const chipTexts = Array.from(
+        wrapper.querySelectorAll(
+          ".llm-user-selected-text-content, .llm-user-selected-text-expanded .llm-selected-context-text",
+        ),
+      );
+      if (
+        chipTexts.some((node) =>
+          (node?.textContent || "").includes(selectedText),
+        )
+      ) {
+        return wrapper;
+      }
+    }
+    return null;
+  };
+  const startedAt = Date.now();
+  let wrapper = findWrapper();
+  while (!wrapper && Date.now() - startedAt <= timeoutMs) {
+    await Zotero.Promise.delay(25);
+    wrapper = findWrapper();
+  }
+  if (!wrapper) {
+    throw new Error("The sent user turn with the chip was not rendered");
+  }
+  const bubble = wrapper.querySelector(".llm-bubble.user");
+  // Bars that belong to a chip whose card carries a question; one card per
+  // such chip means none.
+  const questionChipIndices = new Set(
+    (
+      Array.from(
+        wrapper.querySelectorAll(".llm-user-selected-text-expanded"),
+      ) as HTMLElement[]
+    )
+      .filter((card) => card.querySelector(".llm-selected-context-question"))
+      .map((card) => card.dataset.contextIndex),
+  );
+  const sentBubbleBarCount = (
+    Array.from(
+      wrapper.querySelectorAll(".llm-user-selected-text"),
+    ) as HTMLElement[]
+  ).filter((bar) => questionChipIndices.has(bar.dataset.contextIndex)).length;
+  return {
+    sentBubbleBarCount,
+    sentBubbleBodyText: isShown(bubble)
+      ? (bubble.textContent || "").trim()
+      : "",
+    sentBubbleChipQuestions: (
+      Array.from(
+        wrapper.querySelectorAll(".llm-user-selected-text-expanded"),
+      ) as HTMLElement[]
+    )
+      .filter((expanded) => isShown(expanded))
+      .flatMap((expanded) =>
+        Array.from(
+          expanded.querySelectorAll(".llm-selected-context-question"),
+        ).map((node) => (node?.textContent || "").trim()),
+      ),
+  };
+}
+
+/**
+ * Reader Add Text opens the inline box with the selection quoted above the
+ * editor. Enter attaches the typed text to the new chip as its question and
+ * sends nothing; the composer draft stays. A later send with an empty
+ * composer carries the chip question. Keys typed in the box must not drive
+ * the reader's own shortcuts.
+ */
+async function exerciseReaderPopupInlinePrompt(
+  input: Parameters<WorkflowTestApi["exerciseReaderPopupInlinePrompt"]>[0],
+): ReturnType<WorkflowTestApi["exerciseReaderPopupInlinePrompt"]> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(input.panelId);
+  const reader = await openWorkflowPdfReader(
+    input.attachmentItemId,
+    input.pageIndex,
+  );
+  const previousInterceptor = getWorkflowTestSendInterceptor();
+  let popupHost: HTMLElement | null = null;
+  let selectionDoc: Document | null = null;
+  let popupDoc: Document | null = null;
+  try {
+    mountWorkflowPanelInReaderPane(panel, reader);
+    const composer = panel.body.querySelector(
+      "#llm-input",
+    ) as HTMLTextAreaElement | null;
+    if (!composer) throw new Error("Workflow test input box was not rendered");
+    composer.value = "keep this draft";
+    const EventCtor = panel.body.ownerDocument.defaultView?.Event ?? Event;
+    composer.dispatchEvent(new EventCtor("input", { bubbles: true }));
+
+    const popupAction = await dispatchWorkflowReaderAddTextPopup({
+      reader,
+      pageIndex: input.pageIndex,
+      selectedText: input.selectedText,
+    });
+    popupHost = popupAction.popupHost;
+    selectionDoc = popupAction.selectionDoc;
+    popupDoc = popupAction.popupDoc;
+    const mountedItem = activeContextPanels.get(panel.body)?.() || panel.item;
+    const conversationKey = getConversationKey(mountedItem);
+    await waitForSelectedContext({
+      conversationKey,
+      selectedText: input.selectedText,
+      pageIndex: input.pageIndex,
+    });
+    const chipsForText = () =>
+      getSelectedTextContextEntries(conversationKey).filter(
+        (context) => context.text === input.selectedText,
+      );
+    const chipAddedBeforeEnter = chipsForText().length === 1;
+
+    const promptBox = await waitForReaderPromptEditor(popupDoc);
+    if (!promptBox) {
+      return {
+        chipAddedBeforeEnter,
+        overlayMounted: false,
+        overlayDocumentUrl: "",
+        quoteText: "",
+        quoteLabel: "",
+        buttonLabel: "",
+        editorKeys: [],
+        readerKeyStateBefore: "",
+        readerKeyStateAfter: "",
+        sentOnEnter: false,
+        attachedQuestion: "",
+        chipCount: chipsForText().length,
+        previewQuestionText: null,
+        previewLabels: [],
+        overlayRemovedAfterEnter: false,
+        composerAfterEnter: composer.value,
+        statusAfterEnter: "",
+        sentQuestion: "",
+        sentDisplayQuestion: "",
+        sentSelectedTexts: [],
+        sentBubbleBodyText: "",
+        sentBubbleChipQuestions: [],
+        sentBubbleBarCount: 0,
+      };
+    }
+    const box = readReaderPromptBox(popupDoc);
+
+    // Keys that Zotero's reader binds unless the target is a text box.
+    const mod = Zotero.isMac ? { metaKey: true } : { ctrlKey: true };
+    const readerKeyStateBefore = JSON.stringify(
+      readWorkflowReaderKeyState(reader),
+    );
+    const editorKeys: Array<{ key: string; defaultPrevented: boolean }> = [];
+    for (const [label, init] of [
+      ["Mod+A", { key: "a", code: "KeyA", ...mod }],
+      ["Backspace", { key: "Backspace", code: "Backspace" }],
+      ["ArrowRight", { key: "ArrowRight", code: "ArrowRight" }],
+      ["h", { key: "h", code: "KeyH" }],
+    ] as Array<[string, KeyboardEventInit]>) {
+      const event = makeReaderPromptKey(popupDoc, init);
+      promptBox.dispatchEvent(event);
+      editorKeys.push({ key: label, defaultPrevented: event.defaultPrevented });
+    }
+    // Reader state updates that a shortcut triggers settle asynchronously.
+    await Zotero.Promise.delay(50);
+    const readerKeyStateAfter = JSON.stringify(
+      readWorkflowReaderKeyState(reader),
+    );
+    if (!popupDoc.querySelector(READER_PROMPT_OVERLAY_SELECTOR)) {
+      throw new Error("Editing keys closed the reader inline prompt");
+    }
+
+    installRecordingSendInterceptor();
+    submitReaderPrompt(popupDoc, promptBox, input.prompt);
+    const sentOnEnter = await sentWithin(1000);
+    const chips = chipsForText();
+    const readPreviewQuestion = (): string | null => {
+      const element = panel.body.querySelector(
+        "#llm-selected-context-list .llm-selected-context-question",
+      );
+      return element ? (element.textContent || "").trim() : null;
+    };
+    const previewStartedAt = Date.now();
+    while (!readPreviewQuestion() && Date.now() - previewStartedAt <= 2000) {
+      await Zotero.Promise.delay(25);
+    }
+    const afterEnter = {
+      attachedQuestion: chips[0]?.userQuery ?? "",
+      chipCount: chips.length,
+      previewQuestionText: readPreviewQuestion(),
+      previewLabels: Array.from(
+        panel.body.querySelectorAll(
+          "#llm-selected-context-list .llm-selected-context-label",
+        ),
+      ).map((node) => (node?.textContent || "").trim()),
+      overlayRemovedAfterEnter: !popupDoc.querySelector(
+        READER_PROMPT_OVERLAY_SELECTOR,
+      ),
+      composerAfterEnter: composer.value,
+      statusAfterEnter:
+        panel.body.querySelector("#llm-status")?.textContent?.trim() || "",
+    };
+
+    // The main Send with an empty composer carries the chip question; it
+    // runs into the real send so the user turn renders.
+    const restoreFinalRequest = installRenderingSendInterceptor();
+    let send: SendQuestionOptions;
+    let sentBubble: Awaited<ReturnType<typeof readSentUserBubble>>;
+    try {
+      send = await ask(input.panelId, "");
+      sentBubble = await readSentUserBubble(panel.body, input.selectedText);
+    } finally {
+      restoreFinalRequest();
+    }
+    return {
+      chipAddedBeforeEnter,
+      overlayMounted: true,
+      overlayDocumentUrl: popupDoc.URL,
+      ...box,
+      editorKeys,
+      readerKeyStateBefore,
+      readerKeyStateAfter,
+      sentOnEnter,
+      ...afterEnter,
+      sentQuestion: send.question ?? "",
+      sentDisplayQuestion: send.displayQuestion ?? "",
+      sentSelectedTexts: send.selectedTexts ?? [],
+      ...sentBubble,
+    };
+  } finally {
+    setWorkflowTestSendInterceptor(previousInterceptor);
+    if (popupDoc) closeReaderSelectionPromptOverlay(popupDoc);
+    selectionDoc?.defaultView?.getSelection?.()?.removeAllRanges();
+    popupHost?.remove();
+    await closeWorkflowReader(reader);
+  }
+}
+
+/**
+ * Add Text on a selection that already is a chip opens the box against that
+ * chip; Enter replaces its question and never adds a second chip.
+ */
+async function exerciseReaderPopupDuplicateAttach(
+  input: Parameters<WorkflowTestApi["exerciseReaderPopupDuplicateAttach"]>[0],
+): ReturnType<WorkflowTestApi["exerciseReaderPopupDuplicateAttach"]> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(input.panelId);
+  const reader = await openWorkflowPdfReader(
+    input.attachmentItemId,
+    input.pageIndex,
+  );
+  const previousInterceptor = getWorkflowTestSendInterceptor();
+  const popupHosts: HTMLElement[] = [];
+  let selectionDoc: Document | null = null;
+  let popupDoc: Document | null = null;
+  try {
+    mountWorkflowPanelInReaderPane(panel, reader);
+    const mountedItem = activeContextPanels.get(panel.body)?.() || panel.item;
+    const conversationKey = getConversationKey(mountedItem);
+    const chipsForText = () =>
+      getSelectedTextContextEntries(conversationKey).filter(
+        (context) => context.text === input.selectedText,
+      );
+    installRecordingSendInterceptor();
+
+    const addAndAttach = async (question: string) => {
+      const action = await dispatchWorkflowReaderAddTextPopup({
+        reader,
+        pageIndex: input.pageIndex,
+        selectedText: input.selectedText,
+      });
+      popupHosts.push(action.popupHost);
+      selectionDoc = action.selectionDoc;
+      popupDoc = action.popupDoc;
+      await waitForSelectedContext({
+        conversationKey,
+        selectedText: input.selectedText,
+        pageIndex: input.pageIndex,
+      });
+      const editor = await waitForReaderPromptEditor(action.popupDoc);
+      const statusBeforeEnter =
+        panel.body.querySelector("#llm-status")?.textContent?.trim() || "";
+      if (!editor) {
+        return {
+          mounted: false,
+          quoteText: "",
+          statusBeforeEnter,
+          overlayRemovedAfterEnter: false,
+        };
+      }
+      const quoteText = readReaderPromptBox(action.popupDoc).quoteText;
+      submitReaderPrompt(action.popupDoc, editor, question);
+      return {
+        mounted: true,
+        quoteText,
+        statusBeforeEnter,
+        overlayRemovedAfterEnter: !action.popupDoc.querySelector(
+          READER_PROMPT_OVERLAY_SELECTOR,
+        ),
+      };
+    };
+
+    const first = await addAndAttach(input.firstPrompt);
+    const firstQuestion = chipsForText()[0]?.userQuery ?? "";
+    const second = await addAndAttach(input.secondPrompt);
+    const sent = await sentWithin(1000);
+    const chips = chipsForText();
+    return {
+      firstMounted: first.mounted,
+      firstQuestion,
+      secondMounted: second.mounted,
+      secondQuoteText: second.quoteText,
+      statusBeforeSecondEnter: second.statusBeforeEnter,
+      secondOverlayRemovedAfterEnter: second.overlayRemovedAfterEnter,
+      chipCount: chips.length,
+      finalQuestion: chips[0]?.userQuery ?? "",
+      sent,
+    };
+  } finally {
+    setWorkflowTestSendInterceptor(previousInterceptor);
+    if (popupDoc) closeReaderSelectionPromptOverlay(popupDoc);
+    (selectionDoc as Document | null)?.defaultView
+      ?.getSelection?.()
+      ?.removeAllRanges();
+    for (const host of popupHosts) host.remove();
+    await closeWorkflowReader(reader);
+  }
+}
+
+/**
+ * Reader inline prompt dismissal: Escape closes the box and keeps the chip;
+ * a pointerdown on the PDF page (the nested view document) closes it too.
+ */
+async function exerciseReaderPopupPromptDismissal(
+  input: Parameters<WorkflowTestApi["exerciseReaderPopupPromptDismissal"]>[0],
+): ReturnType<WorkflowTestApi["exerciseReaderPopupPromptDismissal"]> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(input.panelId);
+  const reader = await openWorkflowPdfReader(
+    input.attachmentItemId,
+    input.pageIndex,
+  );
+  const previousInterceptor = getWorkflowTestSendInterceptor();
+  const popupHosts: HTMLElement[] = [];
+  let selectionDoc: Document | null = null;
+  let popupDoc: Document | null = null;
+  const overlaySelector = '[data-llm-reader-selection-prompt="true"]';
+  const waitForOverlay = async (doc: Document, open: boolean) => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 2000) {
+      if (Boolean(doc.querySelector(overlaySelector)) === open) return true;
+      await Zotero.Promise.delay(25);
+    }
+    return false;
+  };
+  try {
+    const mainDocument = Zotero.getMainWindow?.()?.document || null;
+    const readerPanel = mainDocument
+      ? getReaderContextPanelForTab(mainDocument, reader.tabID)
+      : null;
+    if (!readerPanel) {
+      throw new Error("Workflow reader tab does not expose a context panel");
+    }
+    readerPanel.insertBefore(panel.body, readerPanel.firstChild);
+    const mountedItem = activeContextPanels.get(panel.body)?.() || panel.item;
+    const conversationKey = getConversationKey(mountedItem);
+    const chipCount = (text: string) =>
+      getSelectedTextContextEntries(conversationKey).filter(
+        (context) => context.text === text,
+      ).length;
+    lastSend = null;
+    setWorkflowTestSendInterceptor((opts) => {
+      lastSend = opts;
+      opts.onProviderDispatch?.();
+    });
+
+    const addText = async (selectedText: string) => {
+      const action = await dispatchWorkflowReaderAddTextPopup({
+        reader,
+        pageIndex: input.pageIndex,
+        selectedText,
+      });
+      popupHosts.push(action.popupHost);
+      selectionDoc = action.selectionDoc;
+      popupDoc = action.popupDoc;
+      await waitForSelectedContext({
+        conversationKey,
+        selectedText,
+        pageIndex: input.pageIndex,
+      });
+      return {
+        popupDoc: action.popupDoc,
+        selectionDoc: action.selectionDoc,
+        mounted: await waitForOverlay(action.popupDoc, true),
+      };
+    };
+
+    // Escape in the editor.
+    const first = await addText(input.firstSelectedText);
+    const editor = first.popupDoc.querySelector(
+      `${overlaySelector} [data-llm-reader-selection-prompt-editor="true"]`,
+    ) as HTMLElement | null;
+    const readerWindow = first.popupDoc.defaultView;
+    if (!editor || !readerWindow?.KeyboardEvent) {
+      throw new Error("Reader inline prompt editor was not rendered");
+    }
+    editor.dispatchEvent(
+      new readerWindow.KeyboardEvent(
+        "keydown",
+        cloneEventInitIntoWindow(
+          { key: "Escape", code: "Escape", bubbles: true, cancelable: true },
+          readerWindow,
+        ),
+      ),
+    );
+    const escapeClosed = await waitForOverlay(first.popupDoc, false);
+    const firstChipsAfterEscape = chipCount(input.firstSelectedText);
+
+    // A pointerdown on the PDF page, inside the nested view document.
+    const second = await addText(input.secondSelectedText);
+    const viewWindow = second.selectionDoc.defaultView;
+    const pageTarget =
+      second.selectionDoc.body || second.selectionDoc.documentElement;
+    if (!viewWindow?.MouseEvent || !pageTarget) {
+      throw new Error("Workflow PDF view window is unavailable");
+    }
+    pageTarget.dispatchEvent(
+      new viewWindow.MouseEvent(
+        "pointerdown",
+        cloneEventInitIntoWindow(
+          { bubbles: true, cancelable: true, button: 0 },
+          viewWindow,
+        ),
+      ),
+    );
+    const pageClickClosed = await waitForOverlay(second.popupDoc, false);
+    const secondChipsAfterPageClick = chipCount(input.secondSelectedText);
+    await Zotero.Promise.delay(100);
+    return {
+      firstMounted: first.mounted,
+      escapeClosed,
+      firstChipsAfterEscape,
+      secondMounted: second.mounted,
+      overlayAndPageInDifferentDocuments:
+        second.popupDoc !== second.selectionDoc,
+      pageClickClosed,
+      secondChipsAfterPageClick,
+      chipsWithQuestion: getSelectedTextContextEntries(conversationKey).filter(
+        (context) => Boolean(context.userQuery),
+      ).length,
+      sent: lastSend !== null,
+    };
+  } finally {
+    setWorkflowTestSendInterceptor(previousInterceptor);
+    if (popupDoc) closeReaderSelectionPromptOverlay(popupDoc);
+    (selectionDoc as Document | null)?.defaultView
+      ?.getSelection?.()
+      ?.removeAllRanges();
+    for (const host of popupHosts) host.remove();
+    await closeWorkflowReader(reader);
+  }
+}
+
 async function exerciseHighlightAwareContextRetrieval(input: {
   panelId: string;
   attachmentItemId: number;
@@ -4892,7 +5624,7 @@ async function exerciseHighlightAwareContextRetrieval(input: {
     }
     const immediatePreviewText =
       panel.body
-        .querySelector(".llm-selected-context-text")
+        .querySelector("#llm-selected-context-list .llm-selected-context-text")
         ?.textContent?.trim() || "";
 
     const mountedItem = activeContextPanels.get(panel.body)?.() || panel.item;
@@ -4948,8 +5680,436 @@ async function exerciseHighlightAwareContextRetrieval(input: {
   }
 }
 
+async function exerciseContextChipCardVisibility(input: {
+  panelId?: string;
+  standalone: boolean;
+  selectedText: string;
+}): ReturnType<WorkflowTestApi["exerciseContextChipCardVisibility"]> {
+  assertWorkflowTestEnabled();
+  const body = input.standalone
+    ? ((await waitForStandaloneReady()).querySelector(
+        ".llm-standalone-content",
+      ) as HTMLElement | null)
+    : getPanel(input.panelId || "").body;
+  if (!body) throw new Error("Workflow chip panel body is unavailable");
+  const doc = body.ownerDocument;
+  const item = activeContextPanels.get(body)?.();
+  if (!item) throw new Error("Workflow chip panel is not mounted");
+  const conversationKey = getConversationKey(item);
+  // The sidebar host sits off screen, where hit testing finds nothing.
+  const previousLeft = body.style.left;
+  const previousZIndex = body.style.zIndex;
+  if (!input.standalone) {
+    body.style.left = "0";
+    body.style.zIndex = "2147483647";
+  }
+  const added = appendSelectedTextContextForItem(
+    conversationKey,
+    input.selectedText,
+    "pdf",
+  );
+  if (!added) throw new Error("Workflow chip was not added");
+  try {
+    setSelectedTextExpandedIndex(conversationKey, 0);
+    applySelectedTextPreview(body, conversationKey);
+    // The card fades in over about 140 ms.
+    await Zotero.Promise.delay(250);
+    const card = body.querySelector(
+      "#llm-selected-context-list .llm-selected-context.expanded .llm-selected-context-expanded",
+    ) as HTMLElement | null;
+    const row = body.querySelector(
+      "#llm-context-previews",
+    ) as HTMLElement | null;
+    const section = body.querySelector(
+      ".llm-input-section",
+    ) as HTMLElement | null;
+    if (!card || !row || !section) {
+      throw new Error("Workflow chip card, row, or input section is missing");
+    }
+    const cardRect = card.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const sectionRect = section.getBoundingClientRect();
+    const centerX = cardRect.left + cardRect.width / 2;
+    const centerY = cardRect.top + cardRect.height / 2;
+    const hit = doc.elementFromPoint(centerX, centerY);
+    return {
+      cardWidth: cardRect.width,
+      cardHeight: cardRect.height,
+      cardTop: cardRect.top,
+      cardBottom: cardRect.bottom,
+      rowTop: rowRect.top,
+      leftInset: cardRect.left - sectionRect.left,
+      rightInset: sectionRect.right - cardRect.right,
+      hitIsCard: Boolean(hit && (hit === card || card.contains(hit))),
+      hitDescription: hit
+        ? `${hit.localName}.${String(hit.className || "")}`
+        : "none",
+    };
+  } finally {
+    if (!input.standalone) {
+      body.style.left = previousLeft;
+      body.style.zIndex = previousZIndex;
+    }
+    setSelectedTextExpandedIndex(conversationKey, null);
+    setSelectedTextContextEntries(conversationKey, []);
+    applySelectedTextPreview(body, conversationKey);
+  }
+}
+
+async function exerciseAssistantSelectionInlinePrompt(input: {
+  panelId: string;
+  assistantText: string;
+  selectedText: string;
+  prompt: string;
+}): ReturnType<WorkflowTestApi["exerciseAssistantSelectionInlinePrompt"]> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(input.panelId);
+  const doc = panel.body.ownerDocument;
+  const win = doc.defaultView;
+  if (!win) throw new Error("Workflow panel window is unavailable");
+  const chatBox = panel.body.querySelector(
+    "#llm-chat-box",
+  ) as HTMLDivElement | null;
+  if (!chatBox) throw new Error("Workflow panel chat box was not rendered");
+  const composer = panel.body.querySelector(
+    "#llm-input",
+  ) as HTMLTextAreaElement | null;
+  if (!composer) throw new Error("Workflow test input box was not rendered");
+  const offset = input.assistantText.indexOf(input.selectedText);
+  if (offset < 0) {
+    throw new Error("selectedText must occur inside assistantText");
+  }
+  const previousInterceptor = getWorkflowTestSendInterceptor();
+  let restoreFinalRequest: (() => void) | null = null;
+  // Same shape as the assistant bubbles the chat renders, so the popup
+  // controller's `.llm-bubble.assistant` lookup accepts the selection.
+  const bubble = doc.createElement("div") as HTMLDivElement;
+  bubble.className = "llm-bubble assistant";
+  const paragraph = doc.createElement("p");
+  paragraph.textContent = input.assistantText;
+  bubble.appendChild(paragraph);
+  chatBox.appendChild(bubble);
+  try {
+    const EventCtor = win.Event ?? Event;
+    composer.value = "keep this draft";
+    composer.dispatchEvent(new EventCtor("input", { bubbles: true }));
+
+    const textNode = paragraph.firstChild;
+    if (!textNode) throw new Error("Assistant bubble text was not rendered");
+    const range = doc.createRange();
+    range.setStart(textNode, offset);
+    range.setEnd(textNode, offset + input.selectedText.length);
+    const selection = win.getSelection();
+    if (!selection) throw new Error("Workflow panel selection is unavailable");
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const MouseEventCtor = win.MouseEvent;
+    paragraph.dispatchEvent(
+      new MouseEventCtor("mouseup", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      }),
+    );
+    await Zotero.Promise.delay(30);
+
+    const popup = panel.body.querySelector(
+      ".llm-assistant-selection-popup",
+    ) as HTMLElement | null;
+    if (!popup) throw new Error("Assistant selection popup was not rendered");
+    const popupVisible = popup.classList.contains("is-visible");
+
+    const quoteButton = popup.querySelector(
+      ".llm-assistant-selection-action",
+    ) as HTMLButtonElement | null;
+    if (!quoteButton) throw new Error("Quote button was not rendered");
+    quoteButton.dispatchEvent(
+      new MouseEventCtor("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      }),
+    );
+    await Zotero.Promise.delay(30);
+    const promptExpandedAfterQuote = popup.classList.contains("is-expanded");
+    const mountedItem = activeContextPanels.get(panel.body)?.() || panel.item;
+    const conversationKey = getConversationKey(mountedItem);
+    const chipsWithText = () =>
+      getSelectedTextContextEntries(conversationKey).filter(
+        (context) => context.text === input.selectedText,
+      );
+    const chipAddedBeforeAttach = chipsWithText().length > 0;
+    const boxSelectedTextLabel =
+      popup
+        .querySelector(
+          ".llm-assistant-selection-prompt .llm-selected-context-label",
+        )
+        ?.textContent?.trim() || "";
+    const boxSelectedText =
+      popup
+        .querySelector(".llm-assistant-selection-quote")
+        ?.textContent?.trim() || "";
+    const hintText =
+      popup
+        .querySelector(".llm-assistant-selection-prompt-hint")
+        ?.textContent?.trim() || "";
+
+    const promptInput = popup.querySelector(
+      ".llm-assistant-selection-prompt-input",
+    ) as HTMLTextAreaElement | null;
+    if (!promptInput) throw new Error("Inline prompt input was not rendered");
+    // Record-only: Enter in the box must not reach the send flow at all.
+    lastSend = null;
+    setWorkflowTestSendInterceptor((opts) => {
+      lastSend = opts;
+      opts.onProviderDispatch?.();
+    });
+    promptInput.value = input.prompt;
+    promptInput.dispatchEvent(
+      new win.KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await Zotero.Promise.delay(1000);
+    const sentWithinOneSecond = lastSend !== null;
+    const readPreviewQuestion = () =>
+      panel.body
+        .querySelector(
+          "#llm-selected-context-list .llm-selected-context-question",
+        )
+        ?.textContent?.trim() || "";
+    const previewStartedAt = Date.now();
+    while (!readPreviewQuestion() && Date.now() - previewStartedAt <= 2000) {
+      await Zotero.Promise.delay(25);
+    }
+    const previewQuestionText = readPreviewQuestion();
+    const previewLabels = Array.from(
+      panel.body.querySelectorAll(
+        "#llm-selected-context-list .llm-selected-context-label",
+      ),
+    ).map((node) => (node?.textContent || "").trim());
+    const attachedQuestion = chipsWithText()[0]?.userQuery || "";
+    const chipCount = chipsWithText().length;
+    const popupHiddenAfterAttach =
+      !popup.classList.contains("is-visible") &&
+      !popup.classList.contains("is-expanded");
+    const composerAfterAttach = composer.value;
+    const statusAfterAttach =
+      panel.body.querySelector("#llm-status")?.textContent?.trim() || "";
+    const composerFocusedAfterAttach = doc.activeElement === composer;
+
+    // The main Send with an empty composer sends the chip's question; it
+    // runs into the real send so the user turn renders.
+    restoreFinalRequest = installRenderingSendInterceptor();
+    const sendSettledSequenceBefore = getWorkflowTestSendSettledSequence();
+    composer.value = "";
+    composer.dispatchEvent(new EventCtor("input", { bubbles: true }));
+    const sendBtn = panel.body.querySelector(
+      "#llm-send",
+    ) as HTMLButtonElement | null;
+    if (!sendBtn) throw new Error("Workflow test send button was not rendered");
+    sendBtn.click();
+    const send = await waitForLastSend();
+    const startedAt = Date.now();
+    while (
+      getWorkflowTestSendSettledSequence() <= sendSettledSequenceBefore &&
+      Date.now() - startedAt <= 5000
+    ) {
+      await Zotero.Promise.delay(10);
+    }
+    const sentBubble = await readSentUserBubble(panel.body, input.selectedText);
+    return {
+      popupVisible,
+      promptExpandedAfterQuote,
+      chipAddedBeforeAttach,
+      boxSelectedTextLabel,
+      boxSelectedText,
+      hintText,
+      sentWithinOneSecond,
+      attachedQuestion,
+      chipCount,
+      previewQuestionText,
+      previewLabels,
+      popupHiddenAfterAttach,
+      composerAfterAttach,
+      statusAfterAttach,
+      composerFocusedAfterAttach,
+      sentQuestion: send.question,
+      sentDisplayQuestion: send.displayQuestion ?? "",
+      sentSelectedTexts: send.selectedTexts ?? [],
+      ...sentBubble,
+    };
+  } finally {
+    restoreFinalRequest?.();
+    setWorkflowTestSendInterceptor(previousInterceptor);
+    win.getSelection()?.removeAllRanges();
+    bubble.remove();
+  }
+}
+
+/**
+ * Escape and an empty Enter close the assistant inline prompt without
+ * sending and keep the chip without a question; quoting the same text again
+ * reopens the box for that chip, and Enter there sets its question.
+ */
+async function exerciseAssistantSelectionPromptDismissal(input: {
+  panelId: string;
+  assistantText: string;
+  firstSelectedText: string;
+  secondSelectedText: string;
+  duplicatePrompt: string;
+}): ReturnType<WorkflowTestApi["exerciseAssistantSelectionPromptDismissal"]> {
+  assertWorkflowTestEnabled();
+  const panel = getPanel(input.panelId);
+  const doc = panel.body.ownerDocument;
+  const win = doc.defaultView;
+  if (!win) throw new Error("Workflow panel window is unavailable");
+  const chatBox = panel.body.querySelector(
+    "#llm-chat-box",
+  ) as HTMLDivElement | null;
+  if (!chatBox) throw new Error("Workflow panel chat box was not rendered");
+  const previousInterceptor = getWorkflowTestSendInterceptor();
+  const bubble = doc.createElement("div") as HTMLDivElement;
+  bubble.className = "llm-bubble assistant";
+  const paragraph = doc.createElement("p");
+  paragraph.textContent = input.assistantText;
+  bubble.appendChild(paragraph);
+  chatBox.appendChild(bubble);
+  const mountedItem = activeContextPanels.get(panel.body)?.() || panel.item;
+  const conversationKey = getConversationKey(mountedItem);
+  const chipsWithText = (text: string) =>
+    getSelectedTextContextEntries(conversationKey).filter(
+      (context) => context.text === text,
+    );
+  const chipCount = (text: string) => chipsWithText(text).length;
+  const chipQuestion = (text: string) =>
+    chipsWithText(text)[0]?.userQuery || "";
+  const readStatus = () =>
+    panel.body.querySelector("#llm-status")?.textContent?.trim() || "";
+  const getPopup = () => {
+    const popup = panel.body.querySelector(
+      ".llm-assistant-selection-popup",
+    ) as HTMLElement | null;
+    if (!popup) throw new Error("Assistant selection popup was not rendered");
+    return popup;
+  };
+  const selectAndQuote = async (selectedText: string) => {
+    const offset = input.assistantText.indexOf(selectedText);
+    const textNode = paragraph.firstChild;
+    if (offset < 0 || !textNode) {
+      throw new Error("selected text must occur inside assistantText");
+    }
+    const range = doc.createRange();
+    range.setStart(textNode, offset);
+    range.setEnd(textNode, offset + selectedText.length);
+    const selection = win.getSelection();
+    if (!selection) throw new Error("Workflow panel selection is unavailable");
+    selection.removeAllRanges();
+    selection.addRange(range);
+    paragraph.dispatchEvent(
+      new win.MouseEvent("mouseup", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      }),
+    );
+    await Zotero.Promise.delay(30);
+    const popup = getPopup();
+    const quoteButton = popup.querySelector(
+      ".llm-assistant-selection-action",
+    ) as HTMLButtonElement | null;
+    if (!quoteButton) throw new Error("Quote button was not rendered");
+    quoteButton.dispatchEvent(
+      new win.MouseEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      }),
+    );
+    await Zotero.Promise.delay(30);
+    return popup.classList.contains("is-expanded");
+  };
+  const pressInPrompt = async (key: string, value = "") => {
+    const promptInput = getPopup().querySelector(
+      ".llm-assistant-selection-prompt-input",
+    ) as HTMLTextAreaElement | null;
+    if (!promptInput) throw new Error("Inline prompt input was not rendered");
+    promptInput.value = value;
+    promptInput.dispatchEvent(
+      new win.KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await Zotero.Promise.delay(30);
+    const popup = getPopup();
+    return !(
+      popup.classList.contains("is-expanded") ||
+      popup.classList.contains("is-visible")
+    );
+  };
+  try {
+    lastSend = null;
+    setWorkflowTestSendInterceptor((opts) => {
+      lastSend = opts;
+      opts.onProviderDispatch?.();
+    });
+    const firstExpanded = await selectAndQuote(input.firstSelectedText);
+    const escapeClosed = await pressInPrompt("Escape");
+    const firstChipsAfterEscape = chipCount(input.firstSelectedText);
+    const firstQuestionAfterEscape = chipQuestion(input.firstSelectedText);
+    // The same text again: the box opens against the existing chip.
+    const duplicateExpanded = await selectAndQuote(input.firstSelectedText);
+    const duplicateStatus = readStatus();
+    const firstChipsAfterDuplicate = chipCount(input.firstSelectedText);
+    const duplicateAttachClosed = await pressInPrompt(
+      "Enter",
+      input.duplicatePrompt,
+    );
+    const firstChipsAfterDuplicateAttach = chipCount(input.firstSelectedText);
+    const firstQuestionAfterDuplicateAttach = chipQuestion(
+      input.firstSelectedText,
+    );
+    const secondExpanded = await selectAndQuote(input.secondSelectedText);
+    const emptyEnterClosed = await pressInPrompt("Enter");
+    const secondChipsAfterEmptyEnter = chipCount(input.secondSelectedText);
+    const secondQuestionAfterEmptyEnter = chipQuestion(
+      input.secondSelectedText,
+    );
+    await Zotero.Promise.delay(100);
+    return {
+      firstExpanded,
+      escapeClosed,
+      firstChipsAfterEscape,
+      firstQuestionAfterEscape,
+      duplicateExpanded,
+      duplicateStatus,
+      firstChipsAfterDuplicate,
+      duplicateAttachClosed,
+      firstChipsAfterDuplicateAttach,
+      firstQuestionAfterDuplicateAttach,
+      secondExpanded,
+      emptyEnterClosed,
+      secondChipsAfterEmptyEnter,
+      secondQuestionAfterEmptyEnter,
+      sent: lastSend !== null,
+    };
+  } finally {
+    setWorkflowTestSendInterceptor(previousInterceptor);
+    win.getSelection()?.removeAllRanges();
+    bubble.remove();
+  }
+}
+
 async function reset(): Promise<void> {
   assertWorkflowTestEnabled();
+  resolveDelayedCodexModelCatalog?.();
+  resolveDelayedCodexModelCatalog = null;
+  setCodexAppServerModelCatalogLoaderForTests();
+  codexModelCatalogRequests = [];
   resolveDelayedCodexPermissionCatalog?.();
   resolveDelayedCodexPermissionCatalog = null;
   for (const held of heldConversationWriteLocks.values()) held.release();
@@ -4988,6 +6148,7 @@ async function reset(): Promise<void> {
   });
   forcePendingTurnFinalizeFailuresForTests(0);
   forceWebChatSessionAnchorFailuresForTests(0);
+  forceInPlacePaperSwitchFailuresForTests(0);
   // The dragged drawer height lives for the session; a case starts without it.
   resetTaskProgressDrawerHeight();
 }
@@ -5517,6 +6678,40 @@ async function forceWebChatSessionAnchorFailures(count: number): Promise<void> {
   forceWebChatSessionAnchorFailuresForTests(count);
 }
 
+async function failNextInPlacePaperSwitches(count: number): Promise<void> {
+  assertWorkflowTestEnabled();
+  forceInPlacePaperSwitchFailuresForTests(count);
+}
+
+async function getPendingInPlacePaperSwitchFailures(): Promise<number> {
+  assertWorkflowTestEnabled();
+  return getForcedInPlacePaperSwitchFailuresForTests();
+}
+
+// Adds a selected-text chip to the conversation a mounted Zotero pane shows,
+// or clears that conversation's chips when text is null.
+async function setMountedPanelSelectedText(
+  body: Element,
+  text: string | null,
+): Promise<number> {
+  assertWorkflowTestEnabled();
+  const root = body.querySelector("#llm-main") as HTMLElement | null;
+  const itemId = Number(root?.dataset.itemId || 0);
+  if (!(itemId > 0)) throw new Error("The panel shows no conversation");
+  if (text === null) {
+    setSelectedTextContextEntries(itemId, []);
+    applySelectedTextPreview(body, itemId);
+  } else if (
+    !addSelectedTextContext(body, itemId, text, {
+      source: "pdf",
+      focusInput: false,
+    })
+  ) {
+    throw new Error("The selected text was not added");
+  }
+  return itemId;
+}
+
 // Drive a real send through the full request pipeline with intercepting
 // hooks (no network), and return the captured final provider request.
 async function askCapturingFinalRequest(
@@ -5769,6 +6964,96 @@ export function installWorkflowTestHarness(targetAddon: {
       return libraryTextIndexScheduler.reconcile(
         Zotero.Libraries.userLibraryID,
       );
+    },
+    restartLibraryTextIndexFromPreStemmingShape: async (attachmentIds) => {
+      const { startLibraryTextIndex, stopLibraryTextIndex } =
+        await import("../../services/libraryTextIndex");
+      const { closeLibraryTextIndexDb, openLibraryTextIndexDb } =
+        await import("../../services/libraryTextIndex/db");
+      const { getLibraryTextIndexStore } =
+        await import("../../services/libraryTextIndex/store");
+      const { estimateDocumentBytes } =
+        await import("../../services/libraryTextIndex/indexer");
+      const { tokenizeRetrievalText } =
+        await import("../../services/retrieval/retrievalTokenizer");
+      const { TOKENIZER_VERSION_META_KEY } =
+        await import("../../services/libraryTextIndex/constants");
+      await stopLibraryTextIndex();
+      const store = await getLibraryTextIndexStore();
+      const db = await openLibraryTextIndexDb();
+      if (!store || !db) throw new Error("library text index unavailable");
+      // The tokenizer before stemming: surface tokens, as tokenizeRetrievalText
+      // emits them without `stem`.
+      const surfaceTerms = (texts: string[]) => {
+        const tf = texts.map((text) => {
+          const counts: Record<string, number> = Object.create(null);
+          for (const token of tokenizeRetrievalText(text))
+            counts[token] = (counts[token] || 0) + 1;
+          return counts;
+        });
+        return {
+          tf,
+          byteEstimate: estimateDocumentBytes({
+            chunks: texts.map((text, i) => ({ text, tf: tf[i] })),
+          }),
+        };
+      };
+      for (const attachmentId of attachmentIds)
+        await store.repostDocument(attachmentId, 1, surfaceTerms);
+      await db.queryAsync(`DROP TABLE IF EXISTS document_tokenizer`);
+      await db.queryAsync(`DELETE FROM index_meta WHERE key = ?`, [
+        TOKENIZER_VERSION_META_KEY,
+      ]);
+      await closeLibraryTextIndexDb();
+      await startLibraryTextIndex();
+    },
+    libraryTextIndexTokenizerState: async () => {
+      const { getLibraryTextIndexStore } =
+        await import("../../services/libraryTextIndex/store");
+      const {
+        LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
+        TOKENIZER_VERSION_META_KEY,
+      } = await import("../../services/libraryTextIndex/constants");
+      const store = await getLibraryTextIndexStore();
+      if (!store) throw new Error("library text index store unavailable");
+      return {
+        recordedVersion: await store.getIndexMeta(TOKENIZER_VERSION_META_KEY),
+        documentsNeedingRepost: (
+          await store.listDocumentsNeedingRepost(
+            LIBRARY_TEXT_INDEX_TOKENIZER_VERSION,
+            1_000_000,
+          )
+        ).length,
+      };
+    },
+    libraryTextIndexPostingTerms: async (attachmentId) => {
+      const { openLibraryTextIndexDb } =
+        await import("../../services/libraryTextIndex/db");
+      const db = await openLibraryTextIndexDb();
+      if (!db) throw new Error("library text index unavailable");
+      const rows = (await db.queryAsync(
+        `SELECT term FROM postings WHERE attachment_id = ? ORDER BY term`,
+        [attachmentId],
+      )) as Array<{ term: string }>;
+      return rows.map((row) => String(row.term));
+    },
+    searchLibraryTextIndexForTest: async (input) => {
+      const { libraryTextIndex } =
+        await import("../../services/libraryTextIndex");
+      const result = await libraryTextIndex.search({
+        scopeAttachmentIds: input.attachmentIds,
+        queries: input.queries,
+        maxPapers: Math.max(1, input.attachmentIds.length),
+        perPaperTopK: 3,
+      });
+      if (!result) throw new Error("library text index search unavailable");
+      return {
+        paperAttachmentIds: result.papers.map((paper) => paper.attachmentId),
+        matchedTerms: [
+          ...new Set(result.chunks.flatMap((chunk) => chunk.matchedTerms)),
+        ],
+        snippets: result.chunks.map((chunk) => chunk.text),
+      };
     },
     loadPaperContextForTest: async (attachmentId) => {
       const { pdfTextCache } =
@@ -6119,6 +7404,12 @@ export function installWorkflowTestHarness(targetAddon: {
         inputTokenCap: input.inputTokenCap,
         stopAfterNotes: input.stopAfterNotes,
       }),
+    exerciseAgentStopRules: (input) =>
+      exerciseAgentStopRules(getPanel(input.panelId), {
+        scenario: input.scenario,
+        collection: input.collection,
+        papers: input.papers,
+      }),
     exerciseLongJobBatchStop: (input) =>
       exerciseLongJobBatchStop(getPanel(input.panelId), {
         collection: input.collection,
@@ -6265,6 +7556,7 @@ export function installWorkflowTestHarness(targetAddon: {
     startNewStandaloneConversation,
     seedStandaloneUserMessage,
     seedStandaloneConversation,
+    seedStoredConversationTurns,
     resizeStandaloneWindow,
     captureStandaloneScreenshot,
     observeCitationNavigationFocus: async (button, options) => {
@@ -6360,6 +7652,14 @@ export function installWorkflowTestHarness(targetAddon: {
     getLastSend: () => lastSend,
     getDiagnostics,
     configurePermissionCatalogs,
+    configureCodexModelCatalogs,
+    getCodexModelCatalogRequests: () => [...codexModelCatalogRequests],
+    resolveDelayedCodexModelCatalog: async () => {
+      assertWorkflowTestEnabled();
+      resolveDelayedCodexModelCatalog?.();
+      resolveDelayedCodexModelCatalog = null;
+      await Zotero.Promise.delay(50);
+    },
     resolveDelayedCodexPermissionCatalog: resolveDelayedCodexCatalog,
     getPanelPermissionSurface,
     clickPanelPermissionToggle,
@@ -6372,7 +7672,13 @@ export function installWorkflowTestHarness(targetAddon: {
     exerciseReaderSelectionTrackingRecovery,
     exerciseReaderPopupActiveTabRouting,
     exerciseReaderPopupStandaloneRouting,
+    exerciseReaderPopupInlinePrompt,
+    exerciseReaderPopupDuplicateAttach,
+    exerciseReaderPopupPromptDismissal,
     exerciseHighlightAwareContextRetrieval,
+    exerciseContextChipCardVisibility,
+    exerciseAssistantSelectionInlinePrompt,
+    exerciseAssistantSelectionPromptDismissal,
     cleanupFixture,
     listPanelHistory,
     deletePanelHistoryConversation,
@@ -6396,6 +7702,9 @@ export function installWorkflowTestHarness(targetAddon: {
     isFinalRequestHeld,
     releaseFinalRequest,
     forceWebChatSessionAnchorFailures,
+    failNextInPlacePaperSwitches,
+    getPendingInPlacePaperSwitchFailures,
+    setMountedPanelSelectedText,
     askCapturingFinalRequest,
     simulateProviderContextUsage,
     setWorkflowModelInputCap,

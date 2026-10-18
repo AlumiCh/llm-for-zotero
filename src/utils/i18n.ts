@@ -805,6 +805,9 @@ const zhCN: Record<string, string> = {
   "Select a model…": "请选择模型…",
   "Customized…": "自定义…",
   "Loading Codex models…": "正在加载 Codex 模型…",
+  "Refreshing Codex models…": "正在刷新 Codex 模型…",
+  "Could not refresh Codex models. Showing the last known list.":
+    "无法刷新 Codex 模型。显示上次获取的列表。",
   "Could not load Codex models. Showing current model only.":
     "无法加载 Codex 模型。仅显示当前模型。",
   "Retry loading Codex models": "重试加载 Codex 模型",
@@ -1444,6 +1447,20 @@ const zhCN: Record<string, string> = {
   Language: "语言",
   "Auto (follow Zotero)": "自动（跟随 Zotero）",
   "Restart Zotero to apply language change.": "重启 Zotero 以应用语言更改。",
+  // ── Selection prompt ────────────────────────────────────────────────────
+  Quote: "引用",
+  "Ask about this selection…": "就这段选中文字提问…",
+  "Selected text is no longer in the context": "选中文字已不在上下文中",
+  "Selected text already included": "选中文字已包含",
+  "Selected text": "选中文字",
+  "Your question": "你的问题",
+  "Enter to add · Shift+Enter for a new line · Esc to close":
+    "Enter 添加 · Shift+Enter 换行 · Esc 关闭",
+  Add: "添加",
+  "Question attached to the selected text": "问题已附加到选中文字",
+  "Quote selected text": "引用选中文字",
+  "Show all of the selected text": "显示全部选中文字",
+  "Show less of the selected text": "收起选中文字",
 };
 
 // ── Runtime state ────────────────────────────────────────────────────────────

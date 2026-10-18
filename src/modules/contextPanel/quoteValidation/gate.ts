@@ -11,7 +11,12 @@ import {
   collectDisplayedQuoteVerificationRequests,
   finalizeAssistantQuoteCitations,
   finalizeAssistantQuoteCitationsCooperatively,
+  hasVerifiedQuoteLocation,
+  locateParagraphCitationOnPageText,
+  locateParagraphCitationOnPageTextCooperatively,
+  recheckPartialPageLocation,
   type QuoteSecondaryEvidence,
+  type QuoteSourceIndex,
 } from "../../../services/quotes/quoteCitations";
 import type { QuoteCitation } from "../../../shared/types";
 import { paragraphCitationIds } from "../../../services/quotes/paragraphCitations";
@@ -28,6 +33,7 @@ import {
   QUOTE_VALIDATION_POLICY_VERSION,
 } from "./caches";
 import {
+  addCitedAttachmentPageEvidence,
   hasOpenEndedQuoteSourceScope,
   registeredQuoteCitationsForReview,
   shouldRequireBodyEvidenceQuoteSearch,
@@ -52,13 +58,50 @@ function quoteDisplayOverridesEqual(
   );
 }
 
+/**
+ * Upgrade each unverified paragraph citation that its attachment's page text
+ * locates; the rest pass through unchanged. Null means the run was cancelled.
+ */
+async function locateParagraphCitations(
+  citations: QuoteCitation[] | undefined,
+  sourceIndex: QuoteSourceIndex,
+  cooperativeOptions?: {
+    yieldToMain: () => Promise<void>;
+    shouldContinue?: () => boolean;
+  },
+): Promise<QuoteCitation[] | undefined | null> {
+  if (!citations?.length) return citations;
+  const out: QuoteCitation[] = [];
+  for (const original of citations) {
+    const citation = hasVerifiedQuoteLocation(original)
+      ? recheckPartialPageLocation(original, sourceIndex)
+      : original;
+    if (hasVerifiedQuoteLocation(citation)) {
+      out.push(citation);
+      continue;
+    }
+    if (cooperativeOptions) {
+      await cooperativeOptions.yieldToMain();
+      if (cooperativeOptions.shouldContinue?.() === false) return null;
+    }
+    const located = cooperativeOptions
+      ? await locateParagraphCitationOnPageTextCooperatively(
+          { citation, sourceIndex },
+          cooperativeOptions.yieldToMain,
+        )
+      : locateParagraphCitationOnPageText({ citation, sourceIndex });
+    out.push(located || citation);
+  }
+  return out;
+}
+
 export async function applyAssistantMessageQuoteGate(
   assistantMessage: Message,
   markdown: string,
   quoteCitations: QuoteCitation[] | undefined,
-  evidence: QuoteSourceEvidence,
+  contextEvidence: QuoteSourceEvidence,
   options: AssistantQuoteFinalizationOptions,
-  preparedSourceIndex?: ReturnType<typeof buildQuoteSourceIndex>,
+  contextSourceIndex?: ReturnType<typeof buildQuoteSourceIndex>,
   secondaryEvidence: readonly QuoteSecondaryEvidence[] = [],
   cooperativeOptions?: {
     yieldToMain: () => Promise<void>;
@@ -70,13 +113,21 @@ export async function applyAssistantMessageQuoteGate(
     pairedUserMessage: options.pairedUserMessage,
     runtimeRequest: options.runtimeRequest,
   });
-  const sourceEvidenceComplete =
-    evidence.complete && !hasOpenEndedQuoteSourceScope(options);
-  const evidenceSignature = buildQuoteValidationEvidenceSignature(evidence);
   const reviewCitations = registeredQuoteCitationsForReview(
     markdown,
     quoteCitations,
   );
+  // A citation's own attachment is evidence even when no paper context of
+  // the message names it; the prepared index then no longer matches.
+  const evidence = addCitedAttachmentPageEvidence(
+    contextEvidence,
+    reviewCitations,
+  );
+  const preparedSourceIndex =
+    evidence === contextEvidence ? contextSourceIndex : undefined;
+  const sourceEvidenceComplete =
+    evidence.complete && !hasOpenEndedQuoteSourceScope(options);
+  const evidenceSignature = buildQuoteValidationEvidenceSignature(evidence);
   const validationSignature = evidenceSignature
     ? [
         `policy:${QUOTE_VALIDATION_POLICY_VERSION}`,
@@ -126,12 +177,6 @@ export async function applyAssistantMessageQuoteGate(
       { markdown, quoteCitations },
       { preserveParagraphCitations: true },
     );
-    // Preserve paragraph source bindings while reviewing the separate cards.
-    // These records never enter the independent evidence sources below.
-    const paragraphIds = paragraphCitationIds(markdown);
-    const paragraphCitations = quoteCitations?.filter((citation) =>
-      paragraphIds.has(citation.id),
-    );
     const independentIndex =
       preparedSourceIndex ||
       (evidenceSignature
@@ -147,6 +192,16 @@ export async function applyAssistantMessageQuoteGate(
         (source) => source.origin !== "quote-citation",
       ),
     };
+    // Paragraph citations keep their ids and their cards. Each one is looked
+    // up on its own attachment's page text; the records never become
+    // evidence for anything else.
+    const paragraphIds = paragraphCitationIds(markdown);
+    const paragraphCitations = await locateParagraphCitations(
+      quoteCitations?.filter((citation) => paragraphIds.has(citation.id)),
+      sourceIndex,
+      cooperativeOptions,
+    );
+    if (paragraphCitations === null) return false;
     finalized = cooperativeOptions
       ? await finalizeAssistantQuoteCitationsCooperatively(
           {

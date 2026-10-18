@@ -101,6 +101,15 @@ describe("workflow: standalone responsive chrome", function () {
             for (const button of Array.from(
               header.querySelectorAll(".llm-header-actions button"),
             ) as Element[]) {
+              // The Stacked header hides Task progress where its row has no
+              // room for a fifth action; no other action is ever hidden.
+              if (win.getComputedStyle(button)?.display === "none") {
+                assert.isTrue(
+                  button.classList.contains("llm-task-progress-btn"),
+                  `Only Task progress may be hidden: ${context}`,
+                );
+                continue;
+              }
               assert.closeTo(
                 button.getBoundingClientRect().width,
                 bounds.width <= 380 ? 24 : 28,
