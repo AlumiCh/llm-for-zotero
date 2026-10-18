@@ -1,4 +1,5 @@
 import { appLogger } from "../../core/logging";
+import { noteHtmlToModelText } from "../../services/notes/noteRendering";
 import { runCodexNativePanelTurn } from "./codexNative/turnCallbacks";
 import { getPanelRequestUI, type PanelRequestUI } from "./panelRequestUI";
 export type { PanelRequestUI } from "./panelRequestUI";
@@ -7229,7 +7230,7 @@ function buildActiveNoteRuntimeContext(
     title: noteSession.title,
     noteKind: noteSession.noteKind,
     parentItemId: noteSession.parentItemId,
-    noteText: snapshot.text,
+    noteText: noteHtmlToModelText(snapshot.html),
     noteHtml,
   };
 }

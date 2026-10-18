@@ -1,4 +1,5 @@
 import { resolveAgentToolPresentationLabel } from "../toolPresentation";
+import { noteHtmlToModelText } from "../../services/notes/noteRendering";
 import { createJournalId } from "../store/changeJournal";
 import { createAbortController } from "../../utils/apiHelpers";
 import { normalizeExcludedItemIds } from "../../services/context/normalizers";
@@ -1630,7 +1631,7 @@ function resolveScopeActiveNoteContext(
       title: snapshot.title,
       noteKind: snapshot.noteKind,
       parentItemId: snapshot.parentItemId,
-      noteText: snapshot.text,
+      noteText: noteHtmlToModelText(snapshot.html),
       noteHtml: /<[^>]+\bstyle\s*=/i.test(snapshot.html)
         ? snapshot.html.slice(0, 10_000)
         : undefined,

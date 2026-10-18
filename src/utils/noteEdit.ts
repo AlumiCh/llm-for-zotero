@@ -5,6 +5,7 @@ import {
   stripNoteHtml,
 } from "./noteText";
 import { escapeNoteHtml } from "./textSanitization";
+import { collectNoteEmbeds, type NoteEmbed } from "./noteEmbeds";
 
 const NOTE_TEXT_BREAK_TAG = new RegExp(
   `^(?:${NOTE_TEXT_BREAK_PATTERN.source})$`,
@@ -100,6 +101,40 @@ function hasContent(html: string): boolean {
   );
 }
 
+export const NOTE_EMBED_TEXT_EDIT_ERROR =
+  "That text belongs to an embedded citation, PDF highlight or image, which cannot be edited as text. Move or remove the whole item by its {{kind:id}} placeholder instead; no content was changed.";
+
+type TextSpan = { start: number; end: number };
+
+/**
+ * Split a located range around the embedded items it touches. Text inside an
+ * item is never deleted on its own, which would leave an empty citation or
+ * highlight behind. An item whose placeholder the replacement carries is
+ * deleted whole instead, because the replacement puts it back.
+ */
+function splitRangeAroundEmbeds(
+  html: string,
+  range: { matched: TextSpan[]; start: number; end: number },
+  carried?: (itemHtml: string) => boolean,
+): { text: TextSpan[]; carried: NoteEmbed[]; kept: NoteEmbed[] } {
+  const touched = collectNoteEmbeds(html).filter(
+    (embed) => embed.start < range.end && embed.end > range.start,
+  );
+  const carriedItems: NoteEmbed[] = [];
+  const kept: NoteEmbed[] = [];
+  for (const embed of touched)
+    (carried?.(embed.html) ? carriedItems : kept).push(embed);
+  const text = range.matched.filter(
+    (span) =>
+      !touched.some(
+        (embed) => span.start >= embed.start && span.end <= embed.end,
+      ),
+  );
+  if (!text.length && !carriedItems.length)
+    throw new Error(NOTE_EMBED_TEXT_EDIT_ERROR);
+  return { text, carried: carriedItems, kept };
+}
+
 /** Replace a visible selection in the native tree. Complete selected blocks
  * are replaced as blocks; partial inline selections stay inside their block.
  * Source slices preserve every untouched element and attachment attribute. */
@@ -107,10 +142,13 @@ export function replaceNoteSelectionHtml(
   html: string,
   find: string,
   replacementHtml: string,
+  carried?: (itemHtml: string) => boolean,
 ): string | null {
   const range = locateText(html, find, true);
   if (!range) return null;
   const { start: rangeStart, end: rangeEnd } = range;
+  const embeds = splitRangeAroundEmbeds(html, range, carried);
+  const carriedStarts = new Set(embeds.carried.map((embed) => embed.start));
   const root = parseFragment(html, { sourceCodeLocationInfo: true });
   const elements: Element[] = [];
   const visit = (node: Node) => {
@@ -172,7 +210,7 @@ export function replaceNoteSelectionHtml(
       ) {
         return replaceMappedText(
           html,
-          range.matched,
+          [...embeds.text, ...embeds.carried].sort((a, b) => a.start - b.start),
           serialize(replacement[0]),
         );
       }
@@ -199,7 +237,11 @@ export function replaceNoteSelectionHtml(
     if (side === "before" && loc.startOffset >= rangeEnd) return "";
     if (side === "after" && loc.endOffset <= rangeStart) return "";
     // A text selection never authorizes deleting embedded media/provenance.
-    if (isAtom(node)) return side === "before" ? raw : "";
+    // An item the replacement carries is put back by the replacement.
+    if (isAtom(node))
+      return side === "before" && !carriedStarts.has(loc.startOffset)
+        ? raw
+        : "";
     if (node.nodeName === "#text") {
       return side === "before"
         ? html.slice(loc.startOffset, Math.max(loc.startOffset, rangeStart))
@@ -251,22 +293,30 @@ export function replaceTextContentInHtml(
   html: string,
   find: string,
   replace: string,
+  options: {
+    /** Replacement already serialized as HTML, used instead of `replace`. */
+    replacementHtml?: string;
+    carried?: (itemHtml: string) => boolean;
+  } = {},
 ): string | null {
   const range = locateText(html, find, false);
   if (!range) return null;
+  const embeds = splitRangeAroundEmbeds(html, range, options.carried);
   // Remove fully consumed blocks after the insertion point, while retaining
   // the first block's formatting and every embedded image or citation.
-  const deletions = [...range.matched];
+  const deletions = [...embeds.text, ...embeds.carried];
   const visit = (node: Node) => {
     if (!("tagName" in node)) return;
     const loc = node.sourceCodeLocation;
+    const end = loc?.endTag?.startOffset ?? loc?.endOffset ?? 0;
     if (
       loc &&
       blockNames.has(node.tagName) &&
       loc.startOffset > range.start &&
-      (loc.endTag?.startOffset ?? loc.endOffset) <= range.end &&
-      !/<(?:img|hr|math|svg|video|audio)\b|data-(?:citation|annotation)/i.test(
-        html.slice(loc.startOffset, loc.endOffset),
+      end <= range.end &&
+      !/<hr\b/i.test(html.slice(loc.startOffset, loc.endOffset)) &&
+      !embeds.kept.some(
+        (embed) => embed.start >= loc.startOffset && embed.end <= end,
       )
     ) {
       deletions.push({ start: loc.startOffset, end: loc.endOffset });
@@ -278,7 +328,11 @@ export function replaceTextContentInHtml(
     visit,
   );
   deletions.sort((a, b) => a.start - b.start || b.end - a.end);
-  return replaceMappedText(html, deletions, escapeNoteHtml(replace));
+  return replaceMappedText(
+    html,
+    deletions,
+    options.replacementHtml ?? escapeNoteHtml(replace),
+  );
 }
 
 function replaceMappedText(

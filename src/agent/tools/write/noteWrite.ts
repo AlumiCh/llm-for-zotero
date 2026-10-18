@@ -4,6 +4,8 @@ import { importLocalImagesIntoNote } from "../../../services/notes/noteImages";
 import {
   isLikelyHtmlNoteContent,
   normalizeNoteSourceText,
+  noteHtmlToModelText,
+  renderNoteMarkdownWithEmbeds,
   renderRawNoteHtml,
 } from "../../../services/notes/noteRendering";
 import {
@@ -18,6 +20,20 @@ import {
 } from "../../../utils/noteEdit";
 import { synthesizeSelectedTextContexts } from "../../../services/context/normalizers";
 import { noteHtmlMatches } from "../../../utils/noteHtml";
+import {
+  createNoteEmbedCarrier,
+  findMissingNoteEmbeds,
+  formatNoteEmbedToken,
+  hasNoteEmbedTokens,
+  NOTE_EMBED_TOKEN_PATTERN,
+  noteEmbedRegistry,
+  preserveNoteRoot,
+  removeNoteEmbeds,
+  replaceNoteEmbedTokensWithLabels,
+  restoreNoteEmbedTokensInHtml,
+  type NoteEmbed,
+} from "../../../utils/noteEmbeds";
+import { escapeNoteHtml } from "../../../utils/textSanitization";
 import { stateChangeInvocationPlan } from "../../authorization/invocationPlan";
 import {
   savePlanDocumentAsNote,
@@ -68,7 +84,7 @@ export const NOTE_WRITE_GUIDANCE: NonNullable<AgentToolDefinition["guidance"]> =
         request.forcedSkillIds?.includes(WRITE_NOTE_SKILL_ID),
       ),
     instruction:
-      "Use note_write mode:'edit' against the exact note target. For a bound Selected text passage, pass selection:{index:<1-based Selected text number>,replacement:<final Markdown>}. The host binds its owning note, replaces the selected structure, preserves surrounding content and embedded assets, and saves and verifies in one action. Preserve headings and list structure unless the user requests changing them. For precise edits without a bound selection, use patches with plain replacement text; findFormat:'markdown' interprets Markdown copied from library_read. Use mode:'append' to append and mode:'create' for a new note. Resolve a named parent or collection before proposing the write. Pass finalized material by documentId so retries reuse exact content. Safe reviews every note write, including creation; Auto may apply routine same-library note changes directly. After verified success, do not claim that a diff is still awaiting review. " +
+      "Use note_write mode:'edit' against the exact note target. For a bound Selected text passage, pass selection:{index:<1-based Selected text number>,replacement:<final Markdown>}. The host binds its owning note, replaces the selected structure, preserves surrounding content and embedded assets, and saves and verifies in one action. Preserve headings and list structure unless the user requests changing them. For precise edits without a bound selection, use patches with plain replacement text; findFormat:'markdown' interprets Markdown copied from library_read. Use mode:'append' to append and mode:'create' for a new note. Keep every {{kind:id}} placeholder of an embedded citation, highlight or image where its item belongs; remove one only via removeEmbeds when the user asks. Resolve a named parent or collection before proposing the write. Pass finalized material by documentId so retries reuse exact content. Safe reviews every note write, including creation; Auto may apply routine same-library note changes directly. After verified success, do not claim that a diff is still awaiting review. " +
       SOURCE_NOTE_COPY_GUIDANCE,
   };
 
@@ -96,6 +112,74 @@ function sanitizeNoteHtml(html: string): string {
   return s;
 }
 
+function describeEmbeds(embeds: NoteEmbed[]): string {
+  return embeds
+    .map((embed) =>
+      formatNoteEmbedToken({
+        ...embed,
+        label:
+          embed.label.length > 80
+            ? `${embed.label.slice(0, 80).trimEnd()}…`
+            : embed.label,
+      }),
+    )
+    .join(", ");
+}
+
+function assertKnownEmbedTokens(unknown: string[]): void {
+  if (!unknown.length) return;
+  throw new Error(
+    `The note has no embedded item ${Array.from(new Set(unknown)).join(", ")}. Use only {{kind:id}} placeholders that appear in the current note text, never invent or alter one. No content was changed.`,
+  );
+}
+
+/** Render edit or append content, turning placeholders back into the items
+ * of the note they came from. */
+function renderContentWithEmbeds(
+  content: string,
+  isHtml: boolean | undefined,
+  originalHtml: string,
+): string {
+  const registry = noteEmbedRegistry(originalHtml);
+  const rendered = isHtml
+    ? restoreNoteEmbedTokensInHtml(sanitizeNoteHtml(content), registry)
+    : renderNoteMarkdownWithEmbeds(content, registry);
+  assertKnownEmbedTokens(rendered.unknown);
+  return rendered.html;
+}
+
+/** The final HTML of an edit: requested removals applied, and the note's root
+ * container (which holds its citation registry) kept. */
+function finishEditHtml(
+  html: string,
+  originalHtml: string,
+  removeEmbeds: string[] | undefined,
+): string {
+  return preserveNoteRoot(
+    originalHtml,
+    removeNoteEmbeds(html, removeEmbeds || []),
+  );
+}
+
+/** Refuse an edit that would lose an embedded item nobody asked to remove. */
+function assertEmbedsKept(
+  originalHtml: string,
+  nextHtml: string,
+  removeEmbeds: string[] | undefined,
+): void {
+  const registry = noteEmbedRegistry(originalHtml);
+  const strangers = (removeEmbeds || []).filter((id) => !registry.has(id));
+  if (strangers.length)
+    throw new Error(
+      `removeEmbeds names ${strangers.join(", ")}, which is not an embedded item of this note. Use ids from the note's {{kind:id}} placeholders. No content was changed.`,
+    );
+  const missing = findMissingNoteEmbeds(originalHtml, nextHtml, removeEmbeds);
+  if (!missing.length) return;
+  throw new Error(
+    `This edit would delete ${missing.length} embedded item${missing.length === 1 ? "" : "s"} from the note: ${describeEmbeds(missing)}. Put each placeholder back where its item belongs in the new text (moving it is fine, and {{kind:id}} without the label is enough). Only if the user asked to delete an item, list its id in removeEmbeds. No content was changed.`,
+  );
+}
+
 type NoteWriteInput = {
   documentId?: string;
   sourceMessageId?: string;
@@ -109,6 +193,9 @@ type NoteWriteInput = {
   expectedOriginalHtml?: string;
   _patches?: NotePatch[];
   _selection?: { index: number; replacement: string };
+  /** Ids of embedded items (citations, highlights, images) the edit deletes
+   *  on purpose. Every other item of the original note must survive. */
+  removeEmbeds?: string[];
   /** Pre-patched HTML computed by applying patches directly to the original
    *  note HTML.  When set, `execute()` uses this instead of round-tripping
    *  through `renderRawNoteHtml` to preserve images, list numbering, etc. */
@@ -136,6 +223,10 @@ function resolveCreateOrAppendContent(input: NoteWriteInput): void {
   input.content = input._isHtml
     ? sanitizeNoteHtml(input.content)
     : normalizeNoteSourceText(input.content);
+  // A new note has no items for a placeholder to name; keep what it showed.
+  // A finalized document is saved exactly as stored, so it is left alone.
+  if (input.mode === "create" && !input.documentId)
+    input.content = replaceNoteEmbedTokensWithLabels(input.content);
 }
 
 function resolveEditSnapshot(
@@ -181,20 +272,42 @@ function resolveEditSnapshot(
 function applyPatchesToNoteHtml(
   html: string,
   patches: NotePatch[],
-): string | null {
-  if (!patches.length || !html) return html || null;
+): string | { failedPatch: number } {
+  if (!patches.length || !html) return html || { failedPatch: 0 };
 
   let result = html;
-  for (const patch of patches) {
-    const asShown = stripNoteHtml(renderRawNoteHtml(patch.find));
+  for (const [index, patch] of patches.entries()) {
+    // A placeholder in find stands for the text its item displays; one in
+    // replace puts the item itself back.
+    const registry = noteEmbedRegistry(result);
+    const find = patch.find.replace(
+      NOTE_EMBED_TOKEN_PATTERN,
+      (token, _kind, id) => {
+        const embed = registry.get(id);
+        return embed ? stripNoteHtml(embed.html) : token;
+      },
+    );
+    let options: Parameters<typeof replaceTextContentInHtml>[3] = {};
+    if (hasNoteEmbedTokens(patch.replace)) {
+      const restored = restoreNoteEmbedTokensInHtml(
+        escapeNoteHtml(patch.replace),
+        registry,
+      );
+      assertKnownEmbedTokens(restored.unknown);
+      options = {
+        replacementHtml: restored.html,
+        carried: createNoteEmbedCarrier(restored.html),
+      };
+    }
+    const asShown = stripNoteHtml(renderRawNoteHtml(find));
     const applied =
       patch.findFormat === "markdown"
-        ? replaceTextContentInHtml(result, asShown, patch.replace)
-        : (replaceTextContentInHtml(result, patch.find, patch.replace) ??
-          (asShown !== patch.find
-            ? replaceTextContentInHtml(result, asShown, patch.replace)
+        ? replaceTextContentInHtml(result, asShown, patch.replace, options)
+        : (replaceTextContentInHtml(result, find, patch.replace, options) ??
+          (asShown !== find
+            ? replaceTextContentInHtml(result, asShown, patch.replace, options)
             : null));
-    if (applied === null) return null;
+    if (applied === null) return { failedPatch: index };
     result = applied;
   }
   return result;
@@ -385,31 +498,36 @@ function prepareNoteWriteInput(
       const selected = synthesizeSelectedTextContexts(context.request)[
         input._selection.index - 1
       ];
-      const replacementHtml = sanitizeNoteHtml(
-        renderRawNoteHtml(input._selection.replacement),
+      const replacementHtml = renderContentWithEmbeds(
+        input._selection.replacement,
+        false,
+        snapshot.html,
       );
       const patched = replaceNoteSelectionHtml(
         snapshot.html,
         selected.text,
         replacementHtml,
+        createNoteEmbedCarrier(replacementHtml),
       );
       if (patched === null)
         throw new Error(
           "The selected text is missing or occurs more than once in the current note. Select a unique passage before retrying; no content was changed.",
         );
       input._patchedHtml = patched;
-      input.content = normalizeNoteSourceText(patched);
+      input.content = noteHtmlToModelText(patched);
       delete input._selection;
     }
     if (input._patches) {
       const patchedHtml = applyPatchesToNoteHtml(snapshot.html, input._patches);
-      if (patchedHtml === null) {
+      if (typeof patchedHtml !== "string") {
+        const count = input._patches.length;
+        const find = input._patches[patchedHtml.failedPatch]?.find || "";
         throw new Error(
-          "Note patch text was not found. No content was changed; read the current note before retrying.",
+          `Note patch text was not found${count > 1 ? ` (patch ${patchedHtml.failedPatch + 1} of ${count})` : ""}: "${find.length > 120 ? `${find.slice(0, 120)}…` : find}". No content was changed; read the current note before retrying.`,
         );
       }
       input._patchedHtml = patchedHtml;
-      input.content = normalizeNoteSourceText(patchedHtml);
+      input.content = noteHtmlToModelText(patchedHtml);
       delete input._patches;
     }
     if (input._rawHtmlContent) {
@@ -420,6 +538,17 @@ function prepareNoteWriteInput(
     input.content = input._isHtml
       ? input.content
       : normalizeNoteSourceText(input.content);
+    // Bind the exact final HTML now, so the check below and the write agree.
+    const finalHtml = finishEditHtml(
+      input._patchedHtml ??
+        renderContentWithEmbeds(input.content, input._isHtml, snapshot.html),
+      snapshot.html,
+      input.removeEmbeds,
+    );
+    assertEmbedsKept(snapshot.html, finalHtml, input.removeEmbeds);
+    input._patchedHtml = finalHtml;
+  } else if (input.mode === "append") {
+    renderContentWithEmbeds(input.content, input._isHtml, snapshot.html);
   }
   input.expectedOriginalHtml = snapshot.html;
   input.noteId = snapshot.noteId;
@@ -472,9 +601,14 @@ export function createNoteWriteTool(
           targetNoteId: input.targetNoteId || input.noteId,
           expectedText: input.content
             ? stripNoteHtml(
-                input._isHtml
-                  ? sanitizeNoteHtml(input.content)
-                  : input._patchedHtml || renderRawNoteHtml(input.content),
+                input._patchedHtml ??
+                  (input._isHtml
+                    ? sanitizeNoteHtml(
+                        replaceNoteEmbedTokensWithLabels(input.content),
+                      )
+                    : renderRawNoteHtml(
+                        replaceNoteEmbedTokensWithLabels(input.content),
+                      )),
               )
             : undefined,
         },
@@ -562,7 +696,7 @@ export function createNoteWriteTool(
                 replace: {
                   type: "string",
                   description:
-                    "The replacement visible text (plain text, without Markdown formatting markers).",
+                    "The replacement visible text (plain text, without Markdown formatting markers). A {{kind:id}} placeholder puts that item there.",
                 },
               },
               required: ["find", "replace"],
@@ -570,6 +704,12 @@ export function createNoteWriteTool(
             },
             description:
               "For mode 'edit': find-and-replace patches applied to the current note. Much faster than rewriting the full content. Each patch replaces the first occurrence of 'find' with 'replace'.",
+          },
+          removeEmbeds: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Mode 'edit': ids of {{kind:id}} note placeholders (citations, highlights, images) the user asked to delete. Keep all others; an edit dropping one is refused.",
           },
           target: {
             type: "string",
@@ -732,6 +872,29 @@ export function createNoteWriteTool(
         );
       }
 
+      let removeEmbeds: string[] | undefined;
+      if (args.removeEmbeds !== undefined) {
+        const entries = Array.isArray(args.removeEmbeds)
+          ? args.removeEmbeds
+          : [];
+        const ids = entries.map((entry) =>
+          typeof entry === "string"
+            ? /^\s*(?:\{\{\s*(?:citation|highlight|image|embed):)?([0-9a-f]{6,8})\b/i
+                .exec(entry)?.[1]
+                ?.toLowerCase()
+            : undefined,
+        );
+        if (
+          mode !== "edit" ||
+          !Array.isArray(args.removeEmbeds) ||
+          ids.some((id) => !id)
+        )
+          return fail(
+            "removeEmbeds is only for mode 'edit': a list of embedded item ids from the note's {{kind:id}} placeholders, e.g. ['3fa9c1']",
+          );
+        removeEmbeds = Array.from(new Set(ids as string[]));
+      }
+
       // Validate patches structure
       let patches: NotePatch[] | undefined;
       if (hasPatches) {
@@ -785,6 +948,7 @@ export function createNoteWriteTool(
         sourceNoteId,
         _rawHtmlContent: contentHasHtml ? rawContent.trim() : undefined,
         _patches: patches,
+        removeEmbeds: removeEmbeds?.length ? removeEmbeds : undefined,
         _selection: selection as
           | { index: number; replacement: string }
           | undefined,
@@ -916,14 +1080,21 @@ export function createNoteWriteTool(
 
       // Diff preview always uses readable text, even for styled HTML notes
       const diffAfter = input._isHtml
-        ? normalizeNoteSourceText(input.content)
+        ? noteHtmlToModelText(input.content)
         : normalizedContent;
+      const removed = (input.removeEmbeds || [])
+        .map((id) => noteEmbedRegistry(snapshot.html).get(id))
+        .filter((embed): embed is NoteEmbed => Boolean(embed));
 
       return {
         toolName: "note_write",
         mode: "review",
         title: `Review note update`,
-        description: `Review the proposed note changes for "${input.noteTitle}" before applying them.`,
+        description: `Review the proposed note changes for "${input.noteTitle}" before applying them.${
+          removed.length
+            ? ` This edit deletes ${removed.length} embedded item${removed.length === 1 ? "" : "s"}: ${describeEmbeds(removed)}.`
+            : ""
+        }`,
         confirmLabel: "Apply edit",
         cancelLabel: "Cancel",
         fields: [
@@ -939,7 +1110,7 @@ export function createNoteWriteTool(
             id: "noteDiff",
             label: "Note changes",
             sourceFieldId: "content",
-            before: normalizeNoteSourceText(snapshot.html),
+            before: noteHtmlToModelText(snapshot.html),
             after: diffAfter,
             contextLines: 0,
             emptyMessage: "No note changes yet.",
@@ -1167,10 +1338,19 @@ export function createNoteWriteTool(
             );
       if (!targetNote)
         throw new Error("The exact destination note is unavailable");
+      const originalHtml = input.expectedOriginalHtml || "";
+      // The prepared edit HTML is exact; content the user changed in review,
+      // or content with imported images, is rendered again the same way.
       const render = (content: string) =>
-        input._isHtml
-          ? sanitizeNoteHtml(content)
-          : input._patchedHtml || renderRawNoteHtml(content);
+        input.mode === "edit" && content === input.content && input._patchedHtml
+          ? input._patchedHtml
+          : input.mode === "edit"
+            ? finishEditHtml(
+                renderContentWithEmbeds(content, input._isHtml, originalHtml),
+                originalHtml,
+                input.removeEmbeds,
+              )
+            : renderContentWithEmbeds(content, input._isHtml, originalHtml);
       return executePreparedNoteChange({
         context,
         note: targetNote,
@@ -1190,7 +1370,19 @@ export function createNoteWriteTool(
                 });
                 if (finalized.warnings.length)
                   throw new Error(finalized.warnings.join("; "));
-                return finalized.html;
+                const registry = noteEmbedRegistry(originalHtml);
+                const restored = restoreNoteEmbedTokensInHtml(
+                  finalized.html,
+                  registry,
+                );
+                assertKnownEmbedTokens(restored.unknown);
+                return input.mode === "edit"
+                  ? finishEditHtml(
+                      restored.html,
+                      originalHtml,
+                      input.removeEmbeds,
+                    )
+                  : restored.html;
               }
             : hasLocalImages
               ? async () => {

@@ -25,7 +25,7 @@ import {
   createStandaloneNoteFromChatHistory,
 } from "../src/modules/contextPanel/notes";
 import type { Message } from "../src/modules/contextPanel/types";
-import { normalizeNoteSourceText } from "../src/services/notes/noteRendering";
+import { noteHtmlToModelText } from "../src/services/notes/noteRendering";
 import { stripNoteHtml } from "../src/services/notes/noteSnapshot";
 import {
   getTrackedAssistantNoteForParent,
@@ -598,7 +598,7 @@ describe("noteWrite create tracking", function () {
         if (diff?.type === "diff_preview") {
           assert.equal(
             diff.before,
-            normalizeNoteSourceText(before),
+            noteHtmlToModelText(before),
             "both sides use the same readable Markdown representation",
           );
           assert.equal(
@@ -662,6 +662,80 @@ describe("noteWrite create tracking", function () {
       existing.getNote(),
       before.replace("copper-limitation", "copper-limitation (reviewed)"),
     );
+  });
+
+  describe("embedded items in a saved note", function () {
+    const citation =
+      '<span class="citation" data-citation="%7B%22citationItems%22%3A%5B%7B%22uris%22%3A%5B%22http%3A%2F%2Fzotero.org%2Fusers%2Flocal%2Fabc%2Fitems%2FITEM1%22%5D%2C%22locator%22%3A%2242%22%7D%5D%2C%22properties%22%3A%7B%7D%7D">(<span class="citation-item">Smith, 2020, p. 42</span>)</span>';
+    const root =
+      '<div data-schema-version="9" data-citation-items="%5B%7B%22uris%22%3A%5B%22http%3A%2F%2Fzotero.org%2Fusers%2Flocal%2Fabc%2Fitems%2FITEM1%22%5D%7D%5D">';
+    const before = `${root}<p>Drift follows turnover ${citation}.</p></div>`;
+    const token = () => {
+      const match = /\{\{citation:[0-9a-f]{6}[^}]*\}\}/.exec(
+        noteHtmlToModelText(before),
+      );
+      assert.isOk(match, "the model sees the citation as a placeholder");
+      return match![0];
+    };
+
+    it("saves a full rewrite with the citation chip and its registry intact", async function () {
+      const existing = saveExistingNote(61, 9, before);
+      const tool = createNoteWriteTool(new ZoteroGateway());
+      const validated = tool.validate({
+        mode: "edit",
+        targetNoteId: 61,
+        content: `# Reading note\n\nTurnover drives drift ${token()}.`,
+      });
+      assert.isTrue(validated.ok);
+      if (!validated.ok) return;
+      await tool.execute(validated.value, baseContext);
+      const saved = existing.getNote();
+      assert.include(saved, citation);
+      assert.isTrue(saved.startsWith(root));
+      assert.include(saved, "Turnover drives drift");
+    });
+
+    it("saves the user's own review-box wording with the citation restored", async function () {
+      const existing = saveExistingNote(62, 9, before);
+      const tool = createNoteWriteTool(new ZoteroGateway());
+      const validated = tool.validate({
+        mode: "edit",
+        targetNoteId: 62,
+        content: `Model wording ${token()}.`,
+      });
+      assert.isTrue(validated.ok);
+      if (!validated.ok) return;
+      tool.createPendingAction!(validated.value, baseContext);
+      const confirmed = tool.applyConfirmation!(validated.value, {
+        content: `User wording ${token()}.`,
+      });
+      assert.isTrue(confirmed.ok);
+      if (!confirmed.ok) return;
+      await tool.execute(confirmed.value, baseContext);
+      const saved = existing.getNote();
+      assert.include(saved, "User wording");
+      assert.include(saved, citation);
+    });
+
+    it("refuses to save a rewrite that drops the citation, leaving the note as it was", async function () {
+      const existing = saveExistingNote(63, 9, before);
+      const tool = createNoteWriteTool(new ZoteroGateway());
+      const validated = tool.validate({
+        mode: "edit",
+        targetNoteId: 63,
+        content: "Turnover drives drift (Smith, 2020, p. 42).",
+      });
+      assert.isTrue(validated.ok);
+      if (!validated.ok) return;
+      let error: unknown;
+      try {
+        await tool.execute(validated.value, baseContext);
+      } catch (caught) {
+        error = caught;
+      }
+      assert.match(String(error), /would delete 1 embedded item/);
+      assert.equal(existing.getNote(), before);
+    });
   });
 
   for (const example of [

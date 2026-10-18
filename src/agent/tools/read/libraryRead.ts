@@ -1,4 +1,8 @@
 import type { PaperContextRef } from "../../../shared/types";
+import {
+  hasNoteEmbedTokens,
+  NOTE_EMBED_PLACEHOLDER_GUIDANCE,
+} from "../../../utils/noteEmbeds";
 import type { AgentToolDefinition } from "../../types";
 import {
   LibraryReadService,
@@ -214,6 +218,10 @@ export function createLibraryReadTool(
         sections: input.sections,
         results: read.results,
         warnings: read.warnings,
+        // Explain note placeholders once, and only when a note has them.
+        ...(hasNoteEmbedTokens(JSON.stringify(read.results))
+          ? { noteEmbeds: NOTE_EMBED_PLACEHOLDER_GUIDANCE }
+          : {}),
       };
     },
   };

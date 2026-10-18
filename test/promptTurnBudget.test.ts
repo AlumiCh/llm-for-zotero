@@ -26,9 +26,9 @@ import {
  * outside the library only on request (324 tool characters, 2026-10-03).
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 35_474,
+  global: 35_532,
   paper: 34_764,
-  collection: 35_572,
+  collection: 35_630,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

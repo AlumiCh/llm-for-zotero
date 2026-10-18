@@ -11,6 +11,7 @@
 import { libraryIndexService } from "../../../services/libraryIndexService";
 import {
   normalizeNoteSourceText,
+  noteHtmlToModelText,
   renderRawNoteHtml,
 } from "../../../services/notes/noteRendering";
 import {
@@ -236,7 +237,7 @@ export class NoteCapability {
     const noteItem = this.deps.getItem(params.noteId);
     if (!noteItem || !(noteItem as any).isNote?.()) return null;
     const html = noteItem.getNote?.() || "";
-    const text = normalizeNoteSourceText(html);
+    const text = noteHtmlToModelText(html);
     if (!text.trim()) return null;
     const rawTitle = normalizeText(
       (noteItem as any).getNoteTitle?.() || noteItem.getDisplayTitle?.() || "",
@@ -470,7 +471,7 @@ export class NoteCapability {
         const noteItem = Zotero.Items.get(noteId);
         if (!noteItem?.isNote?.()) continue;
         const html = noteItem.getNote?.() || "";
-        const text = normalizeNoteSourceText(html);
+        const text = noteHtmlToModelText(html);
         if (!text.trim()) continue;
         const rawTitle = normalizeText(
           (

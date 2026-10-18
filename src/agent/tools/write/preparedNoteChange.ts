@@ -5,7 +5,7 @@ import {
 } from "../../../services/notePersistence";
 import {
   appendNoteHtml,
-  normalizeNoteSourceText,
+  noteHtmlToModelText,
 } from "../../../services/notes/noteRendering";
 import { invalidateCachedContextText } from "../../../services/paperContent/pdfContext";
 import {
@@ -161,7 +161,7 @@ async function execute(
         status: mode === "append" ? "appended" : "updated",
         noteId: note.id,
         title: note.getNoteTitle?.() || "Note",
-        noteText: normalizeNoteSourceText(verification.html),
+        noteText: noteHtmlToModelText(verification.html),
         preparedAfter: await storeRecoveryText(expected),
         noteVerification: verification,
         noteChange: await captureNoteChange(
