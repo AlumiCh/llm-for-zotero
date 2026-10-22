@@ -54,6 +54,10 @@ import { renderShortcuts } from "./shortcuts";
 import { refreshChat } from "./chat";
 import { prewarmQuoteSourcePageText } from "./quoteValidation/scheduling";
 import {
+  installPaperWarmOnIntent,
+  type PaperWarmTarget,
+} from "./paperWarmOnIntent";
+import {
   beginChatRenderCycle,
   beginOwnedChatRenderCycle,
   claimAsyncChatRender,
@@ -611,6 +615,11 @@ export function registerReaderContextPanel() {
     },
     onAsyncRender: async ({ body, item, setEnabled }) => {
       setEnabled(true);
+      installPaperWarmOnIntent(
+        body,
+        resolveIntentPaperWarmTarget(body),
+        warmPanelPaper,
+      );
 
       const resolvedInitialState = resolveInitialPanelItemState(item);
       const resolvedItem = resolvedInitialState.item;
@@ -713,26 +722,46 @@ export function registerReaderContextPanel() {
         refreshChat(body, resolvedItem);
       }
       markCompletedPanelLifecycleSignature(body, lifecycleSignature);
-      // Defer content extraction so the panel becomes interactive sooner.
-      const activeContextItem = getActiveContextAttachmentFromTabs();
-      if (activeContextItem) {
-        const conversationKey = resolvedItem
-          ? getConversationKey(resolvedItem)
-          : 0;
-        // Context extraction seeds PDF page text when it reads the PDF; the
-        // prewarm then fills it from Zotero's full-text cache or PDFWorker
-        // when that read came from MinerU or an earlier cache, and re-checks
-        // this conversation's quote cards if it added the page text.
-        void ensurePDFTextCached(activeContextItem).finally(() => {
-          void prewarmQuoteSourcePageText({
-            conversationKey,
-            contextItemIds: [activeContextItem.id],
-          });
-        });
-      } else if (item && (item as any).isNote?.()) {
-        void ensureNoteTextCached(item);
+      // The PDF's own text is read when the user starts using this chat
+      // (installPaperWarmOnIntent above), never while the PDF opens (#524).
+      // A note is small and read straight from Zotero, so it stays eager.
+      if (!getActiveContextAttachmentFromTabs() && (item as any)?.isNote?.()) {
+        void ensureNoteTextCached(item!);
       }
     },
+  });
+}
+
+/**
+ * The paper a panel's chat would read: the PDF open in the selected reader
+ * tab, which is the panel the user is typing in.
+ */
+function resolveIntentPaperWarmTarget(
+  body: Element,
+): () => PaperWarmTarget | null {
+  return () => {
+    const contextItem = getActiveContextAttachmentFromTabs();
+    if (!contextItem) return null;
+    const panelItem = activeContextPanels.get(body)?.() || null;
+    return {
+      contextItemId: contextItem.id,
+      conversationKey: panelItem ? getConversationKey(panelItem) : 0,
+    };
+  };
+}
+
+function warmPanelPaper(target: PaperWarmTarget): void {
+  const contextItem = Zotero.Items.get(target.contextItemId);
+  if (!contextItem) return;
+  // Context extraction seeds PDF page text when it reads the PDF; the
+  // prewarm then fills it from Zotero's full-text cache or PDFWorker when
+  // that read came from MinerU or an earlier cache, and re-checks this
+  // conversation's quote cards if it added the page text.
+  void ensurePDFTextCached(contextItem).finally(() => {
+    void prewarmQuoteSourcePageText({
+      conversationKey: target.conversationKey,
+      contextItemIds: [target.contextItemId],
+    });
   });
 }
 
