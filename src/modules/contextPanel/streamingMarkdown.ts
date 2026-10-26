@@ -12,6 +12,10 @@ const streams = new WeakMap<
     committed: string;
     tail: HTMLElement;
     pending: string;
+    /** Top-level elements inside committed blocks, which stay mounted. */
+    committedElements: number;
+    /** When each top-level element first appeared, by position. */
+    appeared: number[];
     scheduler: ReturnType<typeof createCoalescedFrameScheduler>;
   }
 >();
@@ -31,6 +35,9 @@ export function renderStreamingMarkdownInto(
       committed: "",
       tail,
       pending: "",
+      committedElements: 0,
+      // A restart redraws content the reader already saw; keep it still.
+      appeared: state?.appeared ?? [],
       scheduler: null! as ReturnType<typeof createCoalescedFrameScheduler>,
     };
     next.scheduler = createCoalescedFrameScheduler({
@@ -72,6 +79,15 @@ export function renderStreamingMarkdownInto(
             deferEnrichment: true,
           },
         );
+        const fresh = [...blocks, tail].flatMap((block) =>
+          Array.from(block.children),
+        ) as HTMLElement[];
+        markStreamingEntrances(
+          fresh,
+          next.appeared,
+          next.committedElements,
+          now(),
+        );
         withChatContentScrollGuard(target, () => {
           if (next.tail.parentElement === target) {
             next.tail.replaceWith(...blocks, tail);
@@ -79,6 +95,7 @@ export function renderStreamingMarkdownInto(
             target.replaceChildren(...blocks, tail);
           }
           next.committed = committed;
+          next.committedElements += fresh.length - tail.children.length;
           next.tail = tail;
           onResize();
         });
@@ -91,6 +108,38 @@ export function renderStreamingMarkdownInto(
   state.source = source;
   state.pending = source;
   state.scheduler.schedule();
+}
+
+export const STREAMING_FADE_IN_MS = 600;
+
+/**
+ * Fades in elements that are new to the reader. The tail is rebuilt every
+ * frame, so an element's first appearance is recorded by position: a rebuilt
+ * element resumes its fade through a negative delay instead of restarting it,
+ * and an element older than the fade is left alone.
+ */
+export function markStreamingEntrances(
+  elements: HTMLElement[],
+  appeared: number[],
+  firstIndex: number,
+  now: number,
+): void {
+  elements.forEach((element, offset) => {
+    const index = firstIndex + offset;
+    appeared[index] ??= now;
+    const elapsed = now - appeared[index];
+    if (elapsed >= STREAMING_FADE_IN_MS) return;
+    element.classList.add("llm-streaming-fade-in");
+    element.style.animationDelay = `${-Math.round(elapsed)}ms`;
+    // Drop the class once done, or a hidden-then-shown panel replays it.
+    const settle = (event: Event) => {
+      if (event.target !== element) return;
+      element.removeEventListener("animationend", settle);
+      element.classList.remove("llm-streaming-fade-in");
+      element.style.animationDelay = "";
+    };
+    element.addEventListener("animationend", settle);
+  });
 }
 
 export function disposeStreamingMarkdown(target: HTMLElement): void {

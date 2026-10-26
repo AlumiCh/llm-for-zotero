@@ -121,6 +121,26 @@ describe("workflow: standalone side panel", function () {
     return 0.2126 * r + 0.7152 * g + 0.0722 * b;
   }
 
+  function assertOnMainTitleLine(
+    page: WorkflowTestStandaloneSidePanelDiagnostics["design"]["newTabPage"],
+    label: string,
+  ) {
+    assert.isOk(page, `${label}: the New tab page shows`);
+    assert.isNotNull(page!.mainTitleTopPx, `${label}: main start page shows`);
+    assert.closeTo(
+      page!.titleTopPx,
+      page!.mainTitleTopPx!,
+      0.5,
+      `${label}: the titles share a line`,
+    );
+    assert.closeTo(
+      page!.subtitleTopPx!,
+      page!.mainSubtitleTopPx!,
+      0.5,
+      `${label}: the taglines share a line`,
+    );
+  }
+
   /** The panel's bar and rows use the window's own metrics. */
   function assertSameDesign(state: WorkflowTestStandaloneSidePanelDiagnostics) {
     const { design } = state;
@@ -566,7 +586,9 @@ describe("workflow: standalone side panel", function () {
     assert.equal(newTabStart!.subtitle, "Ask on the side, or read a past chat");
     assert.equal(newTabStart!.subtitleFontStyle, "italic");
     assert.closeTo(newTabStart!.centreDxPx, 0, 1, "centred across");
-    assert.closeTo(newTabStart!.centreDyPx, 0, 12, "centred down");
+    // The main chat shows its start page, so the title and tagline sit on
+    // the main title's and tagline's lines.
+    assertOnMainTitleLine(newTabStart, "fresh main chat");
     assert.lengthOf(newTabStart!.rowLefts, 4);
     assert.closeTo(newTabStart!.rowLefts[0], newTabStart!.rowLefts[1], 0.5);
     assert.closeTo(newTabStart!.rowLefts[0], newTabStart!.rowLefts[2], 0.5);

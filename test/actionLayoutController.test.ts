@@ -15,7 +15,9 @@ function layoutFixture(initialWidth: number, connected = true) {
       textContent: label,
       title: "",
       parentElement: null,
-      scrollWidth: 20,
+      get scrollWidth() {
+        return this.textContent.length * 8;
+      },
       get clientWidth() {
         geometryReads++;
         return width;
@@ -147,6 +149,26 @@ describe("action layout lifetime", function () {
     assert.equal(fixture.modelBtn.textContent, "New model");
     assert.equal(fixture.panelRoot.dataset.llmActionLayoutMode, "full");
     assert.lengthOf(fixture.pendingFrames, 0);
+  });
+
+  it("shows model and effort as text only when both fit on one line", function () {
+    // Text is 8 px a character, plus 1 px for rounding: "Example model" 105,
+    // "High" 33, send 36.
+    const fixture = layoutFixture(174);
+    const layout = fixture.controller.applyResponsiveActionButtonsLayout;
+    layout();
+    assert.equal(fixture.modelBtn.textContent, "Example model");
+    assert.equal(fixture.reasoningBtn.textContent, "High");
+
+    // Room for the effort text beside a model icon, but not for both texts.
+    fixture.setWidth(150);
+    layout();
+    assert.equal(fixture.modelBtn.textContent, "");
+    assert.equal(fixture.reasoningBtn.textContent, "");
+    assert.isTrue(
+      fixture.reasoningBtn.classList.contains("llm-reasoning-btn-collapsed"),
+    );
+    assert.equal(fixture.panelRoot.dataset.llmActionLayoutMode, "half");
   });
 
   it("skips the measure-and-apply pass when nothing it reads has changed", function () {

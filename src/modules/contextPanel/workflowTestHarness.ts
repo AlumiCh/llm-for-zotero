@@ -2541,6 +2541,10 @@ async function measurePanelFooterLayout(
     return rect;
   };
 
+  const statusBar = status.parentElement as HTMLElement;
+  const inputSection = panel.body.querySelector(
+    "#llm-main > .llm-input-section",
+  ) as HTMLElement | null;
   const previousWidth = panel.body.style.width;
   const previousStatusText = status.textContent;
   panel.body.style.width = `${input.width}px`;
@@ -2571,6 +2575,10 @@ async function measurePanelFooterLayout(
         textGlyphsAligned &&
         permissionTextRect.top < statusRect.top + statusLineHeight,
       textGlyphsAligned,
+      statusBarHeight: statusBar.getBoundingClientRect().height,
+      spaceAboveStatus: inputSection
+        ? statusRect.top - inputSection.getBoundingClientRect().bottom
+        : Number.NaN,
     };
   } finally {
     panel.body.style.width = previousWidth;
@@ -4198,6 +4206,33 @@ async function exerciseStandaloneComposerManualResize(): Promise<WorkflowTestSta
     throw new Error("Standalone composer resize controls were not rendered");
   }
 
+  const computed = win.getComputedStyle(input);
+  const oneLineHeight = computed
+    ? Number.parseFloat(computed.lineHeight) +
+      Number.parseFloat(computed.paddingTop) +
+      Number.parseFloat(computed.paddingBottom) +
+      Number.parseFloat(computed.borderTopWidth) +
+      Number.parseFloat(computed.borderBottomWidth)
+    : 0;
+  const resizeHandleTargets = Array.from(
+    doc.querySelectorAll(
+      ".llm-standalone-content .llm-standalone-resize-handle",
+    ),
+    (element) => (element as HTMLElement).dataset.resizeTarget || "",
+  );
+  const modeLabel = input
+    .closest(".llm-input-section")
+    ?.querySelector(".llm-agent-toggle-label") as HTMLElement | null;
+  const textLeft =
+    input.getBoundingClientRect().left +
+    (computed ? Number.parseFloat(computed.paddingLeft) : 0);
+  const modeLabelRect = modeLabel?.getBoundingClientRect();
+  // Null when the mode label is not shown in this chat mode.
+  const textOffsetFromModeLabel =
+    modeLabelRect && modeLabelRect.width > 0
+      ? textLeft - modeLabelRect.left
+      : null;
+  const nativeResize = computed?.resize || "";
   const heightBeforeDrag = input.getBoundingClientRect().height;
   const startScreenY = 500;
   handle.dispatchEvent(
@@ -4221,6 +4256,10 @@ async function exerciseStandaloneComposerManualResize(): Promise<WorkflowTestSta
   const heightAfterInput = Number.parseFloat(input.style.height || "0") || 0;
 
   return {
+    oneLineHeight,
+    resizeHandleTargets,
+    textOffsetFromModeLabel,
+    nativeResize,
     heightBeforeDrag,
     heightAfterDrag,
     heightAfterInput,
@@ -4922,6 +4961,18 @@ function readStandaloneSidePanelDiagnostics(): WorkflowTestStandaloneSidePanelDi
             rowLefts: queryAll(nav, "[data-side-launch]").map(
               (row) => row.getBoundingClientRect().left,
             ),
+            titleTopPx: top,
+            subtitleTopPx: subtitle?.getBoundingClientRect().top ?? null,
+            mainTitleTopPx:
+              firstVisible(
+                contentWrapper,
+                ".llm-start-page-title",
+              )?.getBoundingClientRect().top ?? null,
+            mainSubtitleTopPx:
+              firstVisible(
+                contentWrapper,
+                ".llm-start-page-subtitle",
+              )?.getBoundingClientRect().top ?? null,
           };
         })(),
         dayLabel: metrics(

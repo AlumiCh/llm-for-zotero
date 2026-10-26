@@ -438,24 +438,37 @@ describe("workflow: task progress show in answer from the side panel tab", funct
           return rect ? Math.round(rect.top - visibleTop()) : null;
         };
         const offset = firstLine();
-        // Content above the sentence in its answer changes height (a card
-        // or a figure settling): the sentence stays where it is.
+        // Something in the chat changes after the jump (a chip settles):
+        // the chat redoes its layout and saves where the reader is.
+        answer()?.classList.toggle("llm-workflow-test-nudge");
+        await Zotero.Promise.delay(300);
+        // Then the block just above the sentence changes height (a card or
+        // a figure settling smaller): the sentence stays where it is.
         const start = lit()[0];
         const above = (
           Array.from(
             answer()?.querySelectorAll("h1, h2, h3, h4, p, li, pre, table") ||
               [],
           ) as HTMLElement[]
-        ).find(
-          (node) =>
-            start &&
-            !node.contains(start) &&
-            Boolean(node.compareDocumentPosition(start) & 4),
-        );
-        if (above) above.style.display = "none";
+        )
+          .filter(
+            (node) =>
+              start &&
+              !node.contains(start) &&
+              Boolean(node.compareDocumentPosition(start) & 4),
+          )
+          .pop();
+        if (above) {
+          above.style.fontSize = "4px";
+          above.style.lineHeight = "4px";
+        }
         await Zotero.Promise.delay(600);
         const offsetAfterShrink = firstLine();
-        if (above) above.style.display = "";
+        if (above) {
+          above.style.fontSize = "";
+          above.style.lineHeight = "";
+        }
+        answer()?.classList.toggle("llm-workflow-test-nudge");
         await Zotero.Promise.delay(300);
         const shown = (value: number | null) =>
           value !== null && value >= 6 && value < box.clientHeight / 2;

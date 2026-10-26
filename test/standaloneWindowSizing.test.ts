@@ -482,28 +482,9 @@ describe("standalone window sizing", function () {
     cleanup();
   });
 
-  it("grows the window and chat panel together when its handle moves down", function () {
-    assert.deepEqual(
-      computeStandaloneManualVerticalResize({
-        kind: "chat",
-        startScreenY: 700,
-        currentScreenY: 820,
-        startWindowHeight: 900,
-        startElementHeight: 540,
-        minWindowHeight: 500,
-        minElementHeight: 200,
-      }),
-      {
-        windowHeight: 1020,
-        elementHeight: 660,
-      },
-    );
-  });
-
   it("grows the window and typing box together without consuming chat height", function () {
     assert.deepEqual(
       computeStandaloneManualVerticalResize({
-        kind: "input",
         startScreenY: 760,
         currentScreenY: 850,
         startWindowHeight: 900,
@@ -522,7 +503,6 @@ describe("standalone window sizing", function () {
   it("stops typing-box and window growth at the composer maximum", function () {
     assert.deepEqual(
       computeStandaloneManualVerticalResize({
-        kind: "input",
         startScreenY: 760,
         currentScreenY: 980,
         startWindowHeight: 900,
@@ -536,6 +516,81 @@ describe("standalone window sizing", function () {
         elementHeight: 220,
       },
     );
+  });
+
+  it("stops composer and window growth at the screen's usable height", function () {
+    assert.deepEqual(
+      computeStandaloneManualVerticalResize({
+        startScreenY: 760,
+        currentScreenY: 900,
+        startWindowHeight: 900,
+        startElementHeight: 40,
+        minWindowHeight: 500,
+        minElementHeight: 39,
+        maxElementHeight: 220,
+        maxWindowHeight: 960,
+      }),
+      {
+        windowHeight: 960,
+        elementHeight: 100,
+      },
+    );
+  });
+
+  it("moves the window up when the composer drag reaches the screen bottom", function () {
+    const rootListeners = new Map<string, EventListener>();
+    const windowListeners = new Map<string, EventListener>();
+    const input = {
+      dataset: {} as DOMStringMap,
+      style: { height: "40px" },
+      getBoundingClientRect: () => ({ height: 40 }),
+    } as unknown as HTMLTextAreaElement;
+    const handle = {
+      dataset: { resizeTarget: "input" },
+      parentElement: { querySelector: () => input },
+      closest: () => handle,
+    };
+    const root = {
+      contains: () => true,
+      classList: { add: () => {}, remove: () => {} },
+      addEventListener: (type: string, listener: EventListener) => {
+        rootListeners.set(type, listener);
+      },
+      removeEventListener: () => {},
+    } as unknown as HTMLElement;
+    const calls: string[] = [];
+    const win = {
+      outerHeight: 900,
+      outerWidth: 820,
+      screenX: 100,
+      screenY: 400,
+      screen: { availTop: 40, availHeight: 1300 },
+      getComputedStyle: () => ({ minHeight: "39px", maxHeight: "220px" }),
+      moveTo: (x: number, y: number) => calls.push(`move ${x},${y}`),
+      resizeTo: (w: number, h: number) => calls.push(`resize ${w}x${h}`),
+      addEventListener: (type: string, listener: EventListener) => {
+        windowListeners.set(type, listener);
+      },
+      removeEventListener: () => {},
+    } as unknown as Window;
+    const cleanup = installStandaloneVerticalResizeBehavior(win, root);
+    rootListeners.get("mousedown")?.({
+      button: 0,
+      target: handle,
+      screenY: 1250,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    } as unknown as MouseEvent);
+    windowListeners.get("mousemove")?.({
+      screenY: 1330,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    } as unknown as MouseEvent);
+
+    // The window bottom would reach 400 + 980 = 1380, 40px past 1340.
+    assert.deepEqual(calls, ["move 100,360", "resize 820x980"]);
+    assert.equal(input.style.height, "120px");
+    cleanup();
   });
 
   it("marks a composer drag as a manual textarea height", function () {
@@ -614,17 +669,17 @@ describe("standalone window sizing", function () {
   it("honors both window and element minimums while dragging upward", function () {
     assert.deepEqual(
       computeStandaloneManualVerticalResize({
-        kind: "chat",
         startScreenY: 700,
         currentScreenY: 300,
         startWindowHeight: 620,
-        startElementHeight: 320,
+        startElementHeight: 200,
         minWindowHeight: 500,
-        minElementHeight: 200,
+        minElementHeight: 60,
+        maxElementHeight: 220,
       }),
       {
         windowHeight: 500,
-        elementHeight: 200,
+        elementHeight: 80,
       },
     );
   });

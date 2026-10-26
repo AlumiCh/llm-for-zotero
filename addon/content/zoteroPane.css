@@ -197,6 +197,21 @@
   box-sizing: border-box;
   color: var(--fill-primary);
   background: var(--material-sidepane);
+  /* How far the floating chips and composer reach up over the chat
+     (chatFloatingComposer.ts sets the two heights). */
+  --llm-floating-composer: var(--llm-composer-overlay, 0px);
+  --llm-floating-shortcuts: var(--llm-shortcuts-overlay, 0px);
+  --llm-chat-floor: calc(
+    var(--llm-floating-composer) + var(--llm-floating-shortcuts) +
+      min(var(--llm-floating-shortcuts), 6px)
+  );
+}
+
+/* The start page has no chat to run on under the composer: lay it out
+   below the chat as before. */
+.llm-panel[data-start-page-active="true"] {
+  --llm-floating-composer: 0px;
+  --llm-floating-shortcuts: 0px;
 }
 
 /* Code block and Mermaid colours, shared by the chat panel and the
@@ -961,6 +976,19 @@
   }
 }
 
+/* New blocks of a streaming answer fade in; streamingMarkdown.ts sets the delay. */
+@media (prefers-reduced-motion: no-preference) {
+  .llm-streaming-fade-in {
+    animation: llm-streaming-fade-in 600ms ease-out both;
+  }
+}
+
+@keyframes llm-streaming-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
 .llm-runtime-system-controls {
   display: inline-flex;
   align-items: center;
@@ -1512,6 +1540,14 @@
 /* Hide inner header elements in standalone — replaced by topbar + sidebar */
 [data-standalone="true"] .llm-header-top {
   display: none;
+}
+
+/* With its row hidden the header is empty: take back the panel gap under it
+   and the panel's top padding, so the chat starts right at the window's
+   title row. */
+[data-standalone="true"] .llm-header {
+  margin-top: -5px;
+  margin-bottom: -10px;
 }
 
 /* =========================================================================
@@ -3976,6 +4012,11 @@
 
 /* New-tab page: the chat start page, centred, with its two nav rows in
  * place of the notes; the rows keep their own left alignment. */
+/* On the main start page's title line (set by the side panel's script). */
+.llm-standalone-side-panel-newtab .llm-start-page[data-title-line="main"] {
+  justify-content: flex-start;
+}
+
 .llm-standalone-side-panel-newtab-nav {
   align-self: center;
   width: max-content;
@@ -4267,6 +4308,24 @@
   min-width: 0;
 }
 
+/* The chat runs up under the lower part of its title row, with no rule
+   between them, and starts exactly at the lower edge of the title buttons'
+   box, so chat text never runs into a button's hover fill. The row paints
+   above the chat and the task-progress card (z-index 8), so the chat never
+   cuts off a button's lower edge; only the row's own controls take clicks,
+   and the strip between them belongs to the chat. */
+.llm-standalone-content-wrapper > .llm-standalone-content-title {
+  position: relative;
+  z-index: 9;
+  margin-bottom: -5px;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.llm-standalone-content-wrapper > .llm-standalone-content-title > * {
+  pointer-events: auto;
+}
+
 .llm-standalone-content-title-text {
   min-width: 0;
   flex: 1 1 auto;
@@ -4330,38 +4389,29 @@
 .llm-standalone-input-resize-wrap > .llm-input {
   flex: 1 1 auto;
   min-width: 0;
+  resize: none;
 }
 
-/* Transparent hit target over the native bottom-right resize grip. The
+/* Replaces the native grip, which sits at the composer's padding corner. The
    standalone controller grows the OS window by the same vertical delta, while
    the sidebar keeps its native element-only resize behavior. */
 .llm-standalone-resize-handle {
   position: absolute;
-  right: 0;
-  bottom: 0;
+  /* The composer's right and bottom borders, plus its 1px bottom margin. */
+  right: 10px;
+  bottom: 9px;
   z-index: 3;
-  width: 18px;
-  height: 18px;
+  width: 12px;
+  height: 12px;
   cursor: nwse-resize;
-}
-
-/* Gecko's native grip owns pointer handling when it is painted directly on
-   the flexed chat shell. Draw the same triangular affordance on our explicit
-   hit target so chat drags reach the window-aware resize controller. */
-.llm-standalone-resize-handle[data-resize-target="chat"] {
-  color: var(--fill-tertiary, #7a7a7a);
-  background: repeating-linear-gradient(
-    135deg,
-    transparent 0 3px,
-    currentColor 3px 4px,
-    transparent 4px 7px
-  );
-  clip-path: polygon(100% 0, 100% 100%, 0 100%);
-  opacity: 0.75;
+  /* Three diagonal lines, like the native grip. */
+  background: var(--fill-secondary);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12'%3E%3Cpath d='M11 1 1 11M11 5 5 11M11 9 9 11' stroke='black' stroke-linecap='round'/%3E%3C/svg%3E")
+    no-repeat center / 12px 12px;
 }
 
 /* The window's vertical resize controller is bound to the main column only,
-   so the side panel's chat and composer handles would do nothing. */
+   so the side panel's composer handle would do nothing. */
 .llm-standalone-side-body .llm-standalone-resize-handle {
   display: none;
 }
@@ -4615,6 +4665,11 @@
   min-height: 320px;
   max-height: 100vh;
   overflow: hidden;
+  /* The chat runs on under the floating chips and composer: the shell adds
+     their height below its own (--llm-chat-floor) and gives it back, with
+     the panel gap, so they lay out over that added part. */
+  padding-bottom: var(--llm-chat-floor, 0px);
+  margin-bottom: calc(-10px - var(--llm-chat-floor, 0px));
 }
 
 .llm-messages {
@@ -4639,28 +4694,61 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  height: 100%;
-  min-height: 100%;
-  max-height: 100%;
+  /* Down through the shell's part under the chips and composer. */
+  height: calc(100% + var(--llm-chat-floor, 0px));
+  min-height: calc(100% + var(--llm-chat-floor, 0px));
+  max-height: calc(100% + var(--llm-chat-floor, 0px));
   user-select: text;
+  /* Soft edges: the text fades out under the header and above the composer
+     where more of the chat is past that edge. chatLatestButton.ts sets the
+     two heights from the scroll position. The strip on the right stays
+     unmasked so the scrollbar keeps its full length. Above the floating
+     chips and composer the text fades to a faint level and stays faint
+     behind them, so the chat reads as running on under them. */
+  --llm-edge-fade-top: 0px;
+  --llm-edge-fade-bottom: 0px;
+  mask-image:
+    linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 var(--llm-edge-fade-top),
+      #000 calc(100% - var(--llm-chat-floor, 0px) - var(--llm-edge-fade-bottom)),
+      rgba(0, 0, 0, 0.25) calc(100% - var(--llm-floating-composer, 0px)),
+      rgba(0, 0, 0, 0.25) 100%
+    ),
+    linear-gradient(#000, #000);
+  mask-size:
+    calc(100% - 10px) 100%,
+    10px 100%;
+  mask-position:
+    left top,
+    right top;
+  mask-repeat: no-repeat;
 }
 
-/* With no task-progress card, the first message starts where the card starts,
-   so the gap under the actions row matches the card's. Each surface uses the
-   same offset as its card (-8px sidebar, -12px independent pane). */
+/* With no task-progress card, the chat box starts just below the actions row
+   buttons, as it does under the standalone title row. The
+   card keeps its own offset (-8px sidebar, -12px independent pane). */
 .llm-panel .llm-messages {
   padding-top: 0;
 }
 
+/* A little air between the title row and the first message. It is padding
+   inside the chat box, so it scrolls away with the chat and the top fade
+   still starts at the box's top edge. */
+.llm-panel .llm-chat-shell:not(.llm-task-progress-present) > .llm-messages {
+  padding-top: 8px;
+}
+
 .llm-panel:not([data-standalone="true"]) .llm-chat-shell {
-  margin-top: -8px;
+  margin-top: -16px;
 }
 
 :root:not([data-llm-pane-view="stacked"])
   .llm-dedicated-chat-pane
   .llm-panel:not([data-standalone="true"])
   .llm-chat-shell {
-  margin-top: -12px;
+  margin-top: -20px;
 }
 
 .llm-chat-latest {
@@ -4670,7 +4758,7 @@
   position: absolute;
   z-index: 7;
   left: 50%;
-  bottom: 12px;
+  bottom: calc(12px + var(--llm-chat-floor, 0px));
   transform: translateX(-50%);
   display: flex;
   align-items: center;
@@ -4768,15 +4856,17 @@
   padding-left: 25px;
 }
 
+/* Centred on the chat above the floating chips and composer: the shell's
+   box runs on under them (--llm-chat-floor), so that part is left out. */
 .llm-turn-navigator {
   position: absolute;
   z-index: 6;
-  top: 50%;
+  top: calc((100% - var(--llm-chat-floor, 0px)) / 2);
   bottom: auto;
   left: 0;
   width: 20px;
   min-width: 20px;
-  height: calc(100% - 24px);
+  height: calc(100% - var(--llm-chat-floor, 0px) - 24px);
   max-height: 420px;
   transform: translateY(-50%);
   pointer-events: auto;
@@ -4945,6 +5035,42 @@
   box-sizing: border-box;
   width: 100%;
   padding: 2px 1px;
+}
+
+/* Library chat and note editing have no shortcuts: the empty row would
+   still add its padding and a panel gap above the composer. */
+.llm-shortcuts:empty {
+  display: none;
+}
+
+/* The chips and the composer float over the bottom of the chat, the chips
+   6px above the composer (see .llm-chat-shell). Only the chips take the
+   pointer, so the chat between them can still be scrolled and selected. */
+.llm-shortcuts {
+  position: relative;
+  z-index: 4;
+  margin-bottom: -4px;
+  pointer-events: none;
+}
+
+#llm-main > .llm-input-section {
+  z-index: 5;
+}
+
+.llm-shortcuts > * {
+  pointer-events: auto;
+}
+
+/* Opaque over the panel's own colour, so a chip looks as before and the
+   chat behind it does not show through. */
+.llm-shortcuts > .llm-shortcut-btn {
+  background: linear-gradient(var(--fill-quinary), var(--fill-quinary))
+    var(--material-sidepane);
+}
+
+.llm-shortcuts > .llm-shortcut-btn:hover:not(:disabled) {
+  background: linear-gradient(var(--color-accent10), var(--color-accent10))
+    var(--material-sidepane);
 }
 
 /* 2px panel padding plus 3px shortcut padding gives a 5px left gap. */
@@ -5944,9 +6070,14 @@
   user-select: text;
 }
 
+/* Same colours as the composer panel (.llm-input-section), so the bubble
+   follows the light/dark theme. Padding is 1px less to make room for the
+   border, so the bubble keeps its size. */
 .llm-bubble.user {
-  background: var(--color-accent);
-  color: white;
+  padding: 9px 13px;
+  border: 1px solid var(--stroke-secondary);
+  background: var(--material-background);
+  color: var(--fill-primary);
   border-radius: 6px;
   border-bottom-right-radius: 2px;
   font-family: var(--llm-message-font-family, inherit);
@@ -11845,7 +11976,6 @@ label.llm-search-results-item:hover {
 }
 
 .llm-input.llm-input-drop-active {
-  border-color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 6%, transparent);
 }
 
@@ -15528,14 +15658,22 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 .llm-input {
   appearance: none;
   width: 100%;
-  min-height: 60px;
+  /* One text line plus the vertical insets; grows with content. */
+  min-height: calc(var(--llm-fs-12) * 1.35 + 16px);
   max-height: 220px;
   font: inherit;
   font-size: var(--llm-fs-12);
-  padding: 8px 14px;
+  line-height: 1.35;
+  /* The right and bottom insets are transparent borders, not padding, so
+     paint containment clips text and the placeholder at the content edge.
+     The left inset lines the text up with the mode label above it. */
+  padding: 8px 0 0 10px;
   box-sizing: border-box;
   border-radius: 14px;
-  border: none;
+  border-style: solid;
+  border-color: transparent;
+  border-width: 0 10px 8px 0;
+  contain: paint;
   background: var(--fill-quaternary);
   color: var(--fill-primary);
 }
@@ -15660,9 +15798,9 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   --llm-action-icon-size: 18px;
   --llm-action-icon-font-size: var(--llm-action-icon-size);
   --llm-action-font-size: var(--llm-fs-11);
-  --llm-action-dropdown-icon-width: 56px;
+  --llm-action-dropdown-icon-width: 36px;
   --llm-action-dropdown-icon-left-padding: 9px;
-  --llm-action-dropdown-icon-right-padding: 23px;
+  --llm-action-dropdown-icon-right-padding: 9px;
   --llm-action-dropdown-slot-width: calc(1.2em + 12px);
   --llm-action-dropdown-icon-right: 6px;
   display: flex;
@@ -15869,7 +16007,7 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   right: 0;
   bottom: calc(100% + 8px);
   z-index: 30;
-  max-height: min(30vh, 220px);
+  max-height: min(55vh, 440px);
   overflow-y: auto;
   overflow-x: hidden;
   border-radius: 10px;
@@ -16056,6 +16194,8 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   vertical-align: baseline;
 }
 
+/* The panel's 10px row gap less 4px leaves 6px above the text, the same as
+ * the space below it (panel padding plus the item pane section padding). */
 .llm-status-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -16064,7 +16204,8 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   grid-column: 1 / -1;
   min-width: 0;
   flex-shrink: 0;
-  padding: 0 5px;
+  margin-top: -4px;
+  padding: 0 2px 0 5px;
 }
 
 .llm-status,
@@ -16103,6 +16244,8 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   color: var(--fill-tertiary);
 }
 
+/* As tall as one line of status text; the buttons' hover padding and the
+ * gauge's hover box overflow it evenly. */
 .llm-footer-controls {
   display: inline-flex;
   grid-column: 2;
@@ -16113,6 +16256,7 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   gap: 1px;
   flex: 0 0 auto;
   min-width: 0;
+  height: calc(var(--llm-fs-11) * 1.2);
 }
 
 .llm-permission-control {
@@ -16128,7 +16272,7 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   align-items: center;
   overflow: hidden;
   max-width: 14ch;
-  min-height: 20px;
+  margin: 0;
   padding: 1px 3px;
   border: 0;
   border-radius: 5px;
@@ -16294,6 +16438,7 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   line-height: 1.2;
   min-width: 0;
   max-width: 12ch;
+  margin: 0;
   padding: 1px 3px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -16634,24 +16779,13 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   gap: 6px;
 }
 
-.llm-model-btn.llm-model-btn-wrap-2line:not(.llm-model-btn-collapsed) {
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  line-height: 1.1;
-  max-height: calc(3.3em + 12px);
-  text-overflow: clip;
+/* Model name and effort read as one pair: "deepseek-flash  high". */
+.llm-actions .llm-model-btn {
+  padding-right: 6px;
 }
 
-/* The side composer never wraps the model name; it truncates. */
-.llm-standalone-side-panel
-  .llm-model-btn.llm-model-btn-wrap-2line:not(.llm-model-btn-collapsed) {
-  white-space: nowrap;
-  overflow-wrap: normal;
-  word-break: normal;
-  line-height: 1;
-  max-height: none;
-  text-overflow: ellipsis;
+.llm-actions .llm-reasoning-btn {
+  padding-left: 6px;
 }
 
 .llm-action-slot.llm-model-dropdown > .llm-model-btn.llm-model-btn-collapsed {
@@ -16703,62 +16837,20 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   -webkit-mask-image: url("icons/action-reasoning-brain.svg");
 }
 
-.llm-model-btn::after,
-.llm-reasoning-btn::after {
-  content: "▾";
-  position: static;
-  width: auto;
-  height: auto;
-  border-right: none;
-  border-bottom: none;
-  transform: none;
-  font-family: sans-serif;
-  font-size: 12px;
-  line-height: 1;
-  opacity: 0.9;
-  pointer-events: none;
-  flex: 0 0 auto;
-  margin-left: 2px;
-}
-
-.llm-model-btn.llm-model-btn-collapsed::after {
-  display: block;
-  right: 8px;
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  opacity: 0.95;
-  margin-left: 0;
-}
-
-.llm-reasoning-btn.llm-reasoning-btn-collapsed::after {
-  display: block;
-  right: 8px;
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  opacity: 0.95;
-  margin-left: 0;
-}
-
-.llm-reasoning-btn-unavailable {
+.llm-reasoning-btn.llm-reasoning-btn-unavailable {
   color: var(--fill-tertiary);
 }
 
+.llm-reasoning-btn,
 .llm-reasoning-btn-active {
   border-color: transparent;
   background: transparent;
-  color: var(--color-accent);
+  color: color-mix(in srgb, var(--fill-primary) 70%, transparent);
 }
 
 .llm-reasoning-btn-active:hover:not(:disabled) {
   background: transparent;
   border-color: transparent;
-}
-
-.llm-action-slot.llm-reasoning-dropdown
-  > .llm-reasoning-btn.llm-reasoning-btn-collapsed.llm-reasoning-btn-active::before {
-  background-color: var(--color-accent);
 }
 
 .llm-action-slot {
@@ -16780,18 +16872,20 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   position: absolute;
   z-index: 12;
   display: none;
-  gap: 2px;
+  grid-auto-flow: row;
+  gap: 3px;
   box-sizing: border-box;
+  width: max-content;
   min-width: calc(64px * var(--llm-font-scale, 1));
-  max-width: min(88vw, 360px);
-  max-height: 60vh;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: 480px;
   overflow-x: hidden;
   overflow-y: auto;
-  background: var(--material-background);
-  border: 1px solid var(--stroke-secondary);
-  border-radius: calc(6px * var(--llm-font-scale, 1));
-  padding: calc(4px * var(--llm-font-scale, 1));
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2);
+  padding: 6px;
+  border: 1px solid var(--stroke-secondary, rgba(120, 120, 120, 0.35));
+  border-radius: 12px;
+  background: var(--material-background, #fff);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
 }
 
 .llm-model-menu-open,
@@ -16799,29 +16893,13 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   opacity: 1;
 }
 
-.llm-model-menu-hint,
-.llm-reasoning-menu-hint {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  min-height: calc(24px * var(--llm-font-scale, 1));
-  padding: calc(4px * var(--llm-font-scale, 1))
-    calc(8px * var(--llm-font-scale, 1));
-  margin: calc(-4px * var(--llm-font-scale, 1))
-    calc(-4px * var(--llm-font-scale, 1)) 2px;
-  font-size: var(--llm-fs-10);
-  line-height: 1.2;
-  font-weight: 600;
-  color: var(--fill-tertiary);
-  background: var(--material-background);
-  border-bottom: 1px solid var(--stroke-secondary);
-  pointer-events: none;
-}
-
 .llm-model-option,
 .llm-reasoning-option {
+  min-height: 0;
+  padding-block: 7px;
+  padding-inline: 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   font-size: var(--llm-fs-11);
   line-height: 1.2;
   white-space: nowrap;
@@ -16829,6 +16907,7 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 }
 
 .llm-model-option {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -16845,8 +16924,7 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   display: flex;
   align-items: center;
   min-height: calc(24px * var(--llm-font-scale, 1));
-  padding: calc(4px * var(--llm-font-scale, 1))
-    calc(8px * var(--llm-font-scale, 1));
+  padding: 4px 10px;
   font-size: var(--llm-fs-10);
   line-height: 1.2;
   font-weight: 600;
@@ -16856,16 +16934,21 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
 
 .llm-model-menu-empty,
 .llm-reasoning-menu-empty {
-  padding: calc(4px * var(--llm-font-scale, 1))
-    calc(8px * var(--llm-font-scale, 1));
+  padding: 4px 10px;
   font-size: var(--llm-fs-11);
   line-height: 1.3;
   color: var(--fill-tertiary);
 }
 
-.llm-model-option:hover,
-.llm-reasoning-option:hover {
-  background: var(--fill-quinary);
+.llm-model-option:hover:not(:disabled),
+.llm-reasoning-option:hover:not(:disabled) {
+  background: transparent;
+  border-color: var(--stroke-secondary, rgba(120, 120, 120, 0.35));
+}
+
+.llm-model-option.llm-menu-option-selected:not(:disabled),
+.llm-reasoning-option.llm-menu-option-selected:not(:disabled) {
+  border-color: var(--color-accent, #3584e4);
 }
 
 .llm-reasoning-option-disabled,
@@ -18021,14 +18104,14 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 /* In the standalone window the row lines up with the History pane's second
    row (Search history), as the title row does with New chat: the card's
    header sits on that row's 38px band, its border just outside. The
-   chat runs 7px up under the title row and the panel pads 5px, so the
-   card would start 2px above the title row's lower edge; 3px more puts
-   its border 1px below that edge. */
+   chat runs 5px up under the title row and the panel pads 5px, so the
+   card would start at the title row's lower edge; 1px more puts its
+   border 1px below that edge. */
 [data-standalone="true"]
   .llm-chat-shell.llm-task-progress-present[data-task-progress-curtain="opening"],
 [data-standalone="true"]
   .llm-chat-shell.llm-task-progress-present[data-task-progress-curtain="open"] {
-  margin-top: 3px;
+  margin-top: 1px;
 }
 
 :root:not([data-llm-pane-view="stacked"])
@@ -18056,7 +18139,12 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 .llm-chat-shell.llm-task-progress-present > .llm-messages {
   flex: 1 1 0;
   height: auto;
-  min-height: var(--llm-task-progress-chat-strip);
+  /* Down through the shell's part under the chips and composer; the strip
+     is what shows above them. */
+  margin-bottom: calc(-1 * var(--llm-chat-floor, 0px));
+  min-height: calc(
+    var(--llm-task-progress-chat-strip) + var(--llm-chat-floor, 0px)
+  );
   max-height: none;
 }
 
@@ -18064,9 +18152,15 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 .llm-chat-shell.llm-task-progress-shown > .llm-turn-navigator {
   top: calc(
     var(--llm-task-progress-inset, 0px) +
-      (100% - var(--llm-task-progress-inset, 0px)) / 2
+      (
+        100% - var(--llm-task-progress-inset, 0px) - var(--llm-chat-floor, 0px)
+      ) /
+      2
   );
-  height: calc(100% - var(--llm-task-progress-inset, 0px) - 24px);
+  height: calc(
+    100% - var(--llm-task-progress-inset, 0px) - var(--llm-chat-floor, 0px) -
+      24px
+  );
 }
 
 /* The drawer unrolls inside the card, under a hairline. Its height is its

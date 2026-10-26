@@ -211,6 +211,11 @@ export type WorkflowTestStandaloneSidePanelDiagnostics = {
       centreDxPx: number;
       centreDyPx: number;
       rowLefts: number[];
+      titleTopPx: number;
+      subtitleTopPx: number | null;
+      /** The main chat's start-page title and tagline; null without one. */
+      mainTitleTopPx: number | null;
+      mainSubtitleTopPx: number | null;
     } | null;
     dayLabel: WorkflowTestTextMetrics | null;
     sectionLabel: WorkflowTestTextMetrics | null;
@@ -552,9 +557,15 @@ export type WorkflowTestFooterLayout = {
   statusWrapped: boolean;
   controlsPinnedToFirstLine: boolean;
   textGlyphsAligned: boolean;
+  statusBarHeight: number;
+  spaceAboveStatus: number;
 };
 
 export type WorkflowTestStandaloneComposerResizeDiagnostics = {
+  oneLineHeight: number;
+  resizeHandleTargets: string[];
+  textOffsetFromModeLabel: number | null;
+  nativeResize: string;
   heightBeforeDrag: number;
   heightAfterDrag: number;
   heightAfterInput: number;

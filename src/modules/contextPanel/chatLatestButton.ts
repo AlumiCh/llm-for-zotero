@@ -6,6 +6,8 @@ import { createCoalescedFrameScheduler } from "./setupHandlers/controllers/uiSch
 import { ANSWER_LIGHT_SELECTOR } from "./answerQuoteHighlight";
 
 const LATEST_LABEL = "Jump to latest message";
+// The chat fades out over this height at an edge with more text past it.
+const EDGE_FADE_PX = 10;
 const STREAMING_LABEL = "Response in progress. Jump to latest message";
 
 /**
@@ -90,6 +92,15 @@ export function bindChatLatestButton({
     if (button.title !== label) button.title = label;
     if (button.getAttribute("aria-label") !== label)
       button.setAttribute("aria-label", label);
+    // The fade grows with the distance to the edge, so it eases in as the
+    // chat leaves the top or bottom instead of appearing at once.
+    const top = `${Math.round(Math.min(Math.max(chatBox.scrollTop, 0), EDGE_FADE_PX))}px`;
+    const bottom = `${Math.round(Math.min(Math.max(remaining, 0), EDGE_FADE_PX))}px`;
+    const style = chatBox.style;
+    if (style.getPropertyValue("--llm-edge-fade-top") !== top)
+      style.setProperty("--llm-edge-fade-top", top);
+    if (style.getPropertyValue("--llm-edge-fade-bottom") !== bottom)
+      style.setProperty("--llm-edge-fade-bottom", bottom);
   };
   const scheduler = createCoalescedFrameScheduler({
     getWindow: () => win,

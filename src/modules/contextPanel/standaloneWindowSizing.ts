@@ -26,7 +26,6 @@ type StandaloneContextFitOptions = {
 };
 
 export type StandaloneManualVerticalResizeParams = {
-  kind: "chat" | "input";
   startScreenY: number;
   currentScreenY: number;
   startWindowHeight: number;
@@ -34,6 +33,8 @@ export type StandaloneManualVerticalResizeParams = {
   minWindowHeight: number;
   minElementHeight: number;
   maxElementHeight?: number;
+  /** The tallest the window may grow, such as the screen's usable height. */
+  maxWindowHeight?: number;
 };
 
 export type StandaloneManualVerticalResizeFrame = {
@@ -546,22 +547,23 @@ export function computeStandaloneManualVerticalResize(
   const startElementHeight = finiteNonNegative(params.startElementHeight, 0);
   const minWindowHeight = finiteNonNegative(params.minWindowHeight, 0);
   const minElementHeight = finiteNonNegative(params.minElementHeight, 0);
-  const maxElementHeight =
-    params.kind === "input"
-      ? Math.max(
-          minElementHeight,
-          finiteNonNegative(params.maxElementHeight, Number.POSITIVE_INFINITY),
-        )
-      : Number.POSITIVE_INFINITY;
+  const maxElementHeight = Math.max(
+    minElementHeight,
+    finiteNonNegative(params.maxElementHeight, Number.POSITIVE_INFINITY),
+  );
   const pointerDelta = currentScreenY - startScreenY;
   const requestedElementHeight = Math.min(
     maxElementHeight,
     Math.max(minElementHeight, startElementHeight + pointerDelta),
   );
   const elementDelta = requestedElementHeight - startElementHeight;
-  const windowDelta = Math.max(
-    elementDelta,
-    minWindowHeight - startWindowHeight,
+  const maxWindowHeight = Math.max(
+    startWindowHeight,
+    finiteNonNegative(params.maxWindowHeight, Number.POSITIVE_INFINITY),
+  );
+  const windowDelta = Math.min(
+    Math.max(elementDelta, minWindowHeight - startWindowHeight),
+    Math.max(0, maxWindowHeight - startWindowHeight),
   );
   const elementHeight = Math.min(
     maxElementHeight,
@@ -576,8 +578,8 @@ export function computeStandaloneManualVerticalResize(
 }
 
 /**
- * Replace the two native standalone resize operations with a window-aware
- * drag. Sidebar panels retain their native CSS resizing behavior.
+ * Replace the native composer resize with a window-aware drag. Sidebar
+ * panels retain their native CSS resizing behavior.
  */
 export function installStandaloneVerticalResizeBehavior(
   win: Window,
@@ -585,15 +587,17 @@ export function installStandaloneVerticalResizeBehavior(
   options: StandaloneManualResizeOptions = {},
 ): () => void {
   type ActiveDrag = {
-    kind: "chat" | "input";
     handle: HTMLElement;
-    element: HTMLElement;
+    element: HTMLTextAreaElement;
     startScreenY: number;
     startWindowHeight: number;
     startWindowWidth: number;
+    startWindowTop: number;
+    screenTop: number;
+    screenBottom: number;
     startElementHeight: number;
     minElementHeight: number;
-    maxElementHeight?: number;
+    maxElementHeight: number;
     lastWindowHeight: number;
     lastElementHeight: number;
   };
@@ -619,15 +623,11 @@ export function installStandaloneVerticalResizeBehavior(
       ".llm-standalone-resize-handle",
     ) as HTMLElement | null;
     if (!handle || !root.contains(handle)) return;
-    const kind = handle.dataset.resizeTarget;
-    if (kind !== "chat" && kind !== "input") return;
+    if (handle.dataset.resizeTarget !== "input") return;
 
-    const element =
-      kind === "chat"
-        ? handle.parentElement
-        : (handle.parentElement?.querySelector(
-            ".llm-input",
-          ) as HTMLElement | null);
+    const element = handle.parentElement?.querySelector(
+      ".llm-input",
+    ) as HTMLTextAreaElement | null;
     if (!element) return;
     const rect = element.getBoundingClientRect();
     const startWindowHeight = finiteNonNegative(
@@ -643,16 +643,21 @@ export function installStandaloneVerticalResizeBehavior(
     const computed = win.getComputedStyle(element);
     const minElementHeight = parseCssPixels(computed?.minHeight) ?? 0;
     const maxElementHeight =
-      kind === "input"
-        ? (parseCssPixels(computed?.maxHeight) ?? Number.POSITIVE_INFINITY)
-        : undefined;
+      parseCssPixels(computed?.maxHeight) ?? Number.POSITIVE_INFINITY;
+    const screenTop = finiteNumber(win.screen?.availTop) ?? 0;
+    const screenHeight = ceilPositive(win.screen?.availHeight);
     activeDrag = {
-      kind,
       handle,
       element,
       startScreenY: event.screenY,
       startWindowHeight,
       startWindowWidth,
+      startWindowTop: finiteNumber(win.screenY) ?? 0,
+      screenTop,
+      screenBottom:
+        screenHeight === null
+          ? Number.POSITIVE_INFINITY
+          : screenTop + screenHeight,
       startElementHeight: rect.height,
       minElementHeight,
       maxElementHeight,
@@ -673,7 +678,6 @@ export function installStandaloneVerticalResizeBehavior(
     const drag = activeDrag;
     if (!drag) return;
     const frame = computeStandaloneManualVerticalResize({
-      kind: drag.kind,
       startScreenY: drag.startScreenY,
       currentScreenY: event.screenY,
       startWindowHeight: drag.startWindowHeight,
@@ -681,19 +685,25 @@ export function installStandaloneVerticalResizeBehavior(
       minWindowHeight,
       minElementHeight: drag.minElementHeight,
       maxElementHeight: drag.maxElementHeight,
+      maxWindowHeight: drag.screenBottom - drag.screenTop,
     });
 
-    if (
-      drag.kind === "input" &&
-      frame.elementHeight !== drag.lastElementHeight
-    ) {
-      applyManualTextareaHeight(
-        drag.element as HTMLTextAreaElement,
-        frame.elementHeight,
-      );
+    if (frame.elementHeight !== drag.lastElementHeight) {
+      applyManualTextareaHeight(drag.element, frame.elementHeight);
       drag.lastElementHeight = frame.elementHeight;
     }
     if (frame.windowHeight !== drag.lastWindowHeight) {
+      // At the screen's lower edge the window grows upward instead, so the
+      // composer stays on screen.
+      const overflow =
+        drag.startWindowTop + frame.windowHeight - drag.screenBottom;
+      if (overflow > 0 && frame.windowHeight > drag.startWindowHeight) {
+        const top = Math.max(
+          drag.screenTop,
+          Math.min(drag.startWindowTop, drag.startWindowTop - overflow),
+        );
+        win.moveTo?.(win.screenX, top);
+      }
       win.resizeTo(drag.startWindowWidth, frame.windowHeight);
       drag.lastWindowHeight = frame.windowHeight;
     }

@@ -414,16 +414,6 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     chatBox,
     createChatLatestButton(doc),
   );
-  if (isStandaloneBody) {
-    const chatResizeHandle = createElement(
-      doc,
-      "div",
-      "llm-standalone-resize-handle",
-    );
-    chatResizeHandle.dataset.resizeTarget = "chat";
-    chatResizeHandle.setAttribute("aria-hidden", "true");
-    chatShell.appendChild(chatResizeHandle);
-  }
   container.appendChild(chatShell);
 
   // Shortcuts row
@@ -944,6 +934,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
       : t("Open a PDF first"),
     disabled: !hasItem,
   });
+  inputBox.rows = 1;
   if (isStandaloneBody) {
     const inputResizeWrap = createElement(
       doc,

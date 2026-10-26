@@ -18,6 +18,11 @@ export interface ChatScrollSnapshot {
   scrollTop: number;
   updatedAt: number;
   anchor?: ChatScrollAnchor;
+  /**
+   * A place the chat was taken to (Show in answer, a turn marker): kept as
+   * it is until the reader scrolls, not re-read from what is on screen.
+   */
+  held?: boolean;
 }
 
 type ActiveChatNavigation = {
@@ -396,7 +401,13 @@ export function persistChatScrollSnapshotForConversationKey(
     previous?.key === normalized
       ? previous.snapshot.mode === "followBottom"
         ? buildFollowBottomScrollSnapshot(chatBox)
-        : buildAnchoredChatScrollSnapshot(chatBox)
+        : previous.snapshot.held && previous.snapshot.anchor
+          ? {
+              ...previous.snapshot,
+              scrollTop: clampScrollTop(chatBox, chatBox.scrollTop),
+              updatedAt: Date.now(),
+            }
+          : buildAnchoredChatScrollSnapshot(chatBox)
       : buildChatScrollSnapshot(chatBox);
   panelScrollSnapshots.set(chatBox, { key: normalized, snapshot });
   chatScrollSnapshots.set(normalized, snapshot);
@@ -523,6 +534,7 @@ function persistNavigationDestination(navigation: ActiveChatNavigation): void {
   }
   const finalSnapshot: ChatScrollSnapshot = {
     mode: "manual",
+    held: true,
     scrollTop: clampScrollTop(
       navigation.chatBox,
       targetScrollTop ?? navigation.chatBox.scrollTop,

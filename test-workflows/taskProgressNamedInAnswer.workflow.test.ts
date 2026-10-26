@@ -500,8 +500,6 @@ describe("workflow: task progress named in answer", function () {
         latest.visible,
         `the lit sentence's first lines are in sight (covered at ${latest.hit})`,
       );
-      await Zotero.Promise.delay(600);
-      await capture(panel.panelId, "tp-named-latest.png");
 
       const earlier = await named(FIRST, first, "Bexley & Corwin (2025)");
       report.earlier = earlier;

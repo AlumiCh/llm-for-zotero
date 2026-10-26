@@ -439,6 +439,8 @@ export function createStandaloneSidePanel(
   let tabSequence = 0;
   let newTabPage: {
     root: HTMLElement;
+    startPage: HTMLElement;
+    title: HTMLElement;
     sideChatRow: HTMLButtonElement;
     historyRow: HTMLButtonElement;
     miscRow: HTMLButtonElement;
@@ -736,6 +738,7 @@ export function createStandaloneSidePanel(
   };
   const onWindowResize = () => {
     if (isOpen()) syncChromeGap();
+    scheduleNewTabAlign();
   };
   win.addEventListener("resize", onWindowResize);
   // The list takes the Search history popup's theme class; follow the
@@ -758,6 +761,13 @@ export function createStandaloneSidePanel(
       attributeFilter: ["data-standalone-theme"],
     });
   }
+  // The main start page comes and goes with the main chat.
+  const mainStartPageObserver = MutationObserverCtor
+    ? new MutationObserverCtor(() => {
+        if (newTabPage && !newTabPage.root.hidden) scheduleNewTabAlign();
+      })
+    : null;
+  mainStartPageObserver?.observe(mainBody, { childList: true, subtree: true });
   const getOccupiedWidth = () =>
     isOpen()
       ? readPixelVariable(lowerArea, SIDE_PANEL_WIDTH_VARIABLE) +
@@ -996,10 +1006,11 @@ export function createStandaloneSidePanel(
     // As the side bodies: the standalone start page centres in its column.
     root.dataset.standalone = "true";
     const startPage = createElement(doc, "div", "llm-start-page");
+    const title = createElement(doc, "div", "llm-start-page-title", {
+      textContent: "LLM-for-Zotero",
+    });
     startPage.append(
-      createElement(doc, "div", "llm-start-page-title", {
-        textContent: "LLM-for-Zotero",
-      }),
+      title,
       createElement(doc, "div", "llm-start-page-subtitle", {
         textContent: t("Ask on the side, or read a past chat"),
       }),
@@ -1041,8 +1052,11 @@ export function createStandaloneSidePanel(
     startPage.appendChild(nav);
     root.appendChild(startPage);
     viewHost.appendChild(root);
+    alignObserver?.observe(root);
     newTabPage = {
       root,
+      startPage,
+      title,
       sideChatRow,
       historyRow,
       miscRow,
@@ -1054,6 +1068,54 @@ export function createStandaloneSidePanel(
     newTabPage?.root.remove();
     newTabPage = null;
   };
+  // While the main chat shows its start page, the New tab page's title sits
+  // on the same line as the main title, so the two pages read as one row;
+  // otherwise the page centres in its column.
+  let observedMainStartPage: Element | null = null;
+  let alignFrame: number | null = null;
+  const alignNewTabTitle = () => {
+    alignFrame = null;
+    const page = newTabPage;
+    if (disposed || !page || page.root.hidden || !isOpen()) return;
+    const mainStartPages = Array.from(
+      mainBody.querySelectorAll(".llm-start-page, .llm-standalone-start-page"),
+    ) as HTMLElement[];
+    const mainStartPage =
+      mainStartPages.find((element) => element.getClientRects().length) || null;
+    if (mainStartPage !== observedMainStartPage) {
+      if (observedMainStartPage)
+        alignObserver?.unobserve(observedMainStartPage);
+      if (mainStartPage) alignObserver?.observe(mainStartPage);
+      observedMainStartPage = mainStartPage;
+    }
+    const mainTitle = mainStartPage?.querySelector(".llm-start-page-title");
+    const { startPage, title } = page;
+    if (!mainTitle) {
+      delete startPage.dataset.titleLine;
+      startPage.style.removeProperty("padding-top");
+      return;
+    }
+    startPage.dataset.titleLine = "main";
+    const paddingTop =
+      Number.parseFloat(win.getComputedStyle(startPage)?.paddingTop || "") || 0;
+    const shift =
+      mainTitle.getBoundingClientRect().top - title.getBoundingClientRect().top;
+    if (Math.abs(shift) < 0.5) return;
+    startPage.style.paddingTop = `${Math.max(0, paddingTop + shift)}px`;
+  };
+  const scheduleNewTabAlign = () => {
+    if (alignFrame !== null || disposed) return;
+    alignFrame =
+      typeof win.requestAnimationFrame === "function"
+        ? win.requestAnimationFrame(alignNewTabTitle)
+        : (alignNewTabTitle(), null);
+  };
+  const ResizeObserverCtor = (win as any).ResizeObserver as
+    | typeof ResizeObserver
+    | undefined;
+  const alignObserver = ResizeObserverCtor
+    ? new ResizeObserverCtor(() => scheduleNewTabAlign())
+    : null;
 
   // -- History tab ------------------------------------------------------------
   // The Search history field (on the title line) and the list; a picked chat
@@ -3123,6 +3185,7 @@ export function createStandaloneSidePanel(
         full && !tabsState.tabs.some((tab) => tab.kind === "misc");
       page.progressRow.disabled =
         full && !tabsState.tabs.some((tab) => tab.kind === "progress");
+      scheduleNewTabAlign();
     } else if (newTabPage) {
       newTabPage.root.hidden = true;
     }
@@ -3418,6 +3481,9 @@ export function createStandaloneSidePanel(
       madeItemScans.clear();
       resize.dispose();
       themeObserver?.disconnect();
+      mainStartPageObserver?.disconnect();
+      alignObserver?.disconnect();
+      if (alignFrame !== null) win.cancelAnimationFrame?.(alignFrame);
       win.removeEventListener("resize", onWindowResize);
       win.removeEventListener("resize", onWindowResizeSettle);
       if (pendingTimer !== null) win.clearTimeout(pendingTimer);

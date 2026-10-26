@@ -122,6 +122,22 @@ describe("workflow: built-in runtime is always Agent", function () {
     });
   });
 
+  it("keeps the footer row one text line tall with 6px above the text", async function () {
+    await withPrefs(AGENT_MODE_PREFS, async () => {
+      const paper = await createPaper("Agent Footer Spacing Paper");
+      const panel = await api.renderPanelForItem(paper.parentItemId);
+
+      const footer = await api.measurePanelFooterLayout(panel.panelId, {
+        width: 360,
+        statusText: "Ready",
+      });
+      assert.isFalse(footer.statusWrapped);
+      assert.closeTo(footer.statusBarHeight, footer.statusLineHeight, 0.5);
+      assert.closeTo(footer.spaceAboveStatus, 6, 0.5);
+      assert.isTrue(footer.textGlyphsAligned);
+    });
+  });
+
   it("opens every paper in agent mode and ignores the old saved mode", async function () {
     await withPrefs(AGENT_MODE_PREFS, async () => {
       // A mode saved by an older build must not change anything.

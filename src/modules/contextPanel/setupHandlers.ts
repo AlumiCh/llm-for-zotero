@@ -81,12 +81,14 @@ import {
   PREFERENCES_PANE_ID,
 } from "./constants";
 import { bindChatScrollLifecycle } from "./chatScrollLifecycle";
+import { getChatCoveredTop } from "./chatScrollGeometry";
 import {
   isChatViewportVisible,
   navigateChatToMessage,
 } from "./chatScrollSnapshots";
 import { flushPendingChatRender } from "./progressiveChatRender";
 import { bindChatLatestButton } from "./chatLatestButton";
+import { bindFloatingComposer } from "./chatFloatingComposer";
 import {
   createConversationTurnNavigator,
   disposeConversationTurnNavigator,
@@ -460,11 +462,13 @@ import {
 } from "./setupHandlers/lifecycle";
 import { createWebChatFeature } from "./setupHandlers/features/webChat";
 import {
+  MENU_OPTION_SELECTED_CLASS,
   MODEL_MENU_OPEN_CLASS,
   REASONING_MENU_OPEN_CLASS,
   RETRY_MODEL_MENU_OPEN_CLASS,
   SLASH_MENU_OPEN_CLASS,
   isFloatingMenuOpen,
+  positionComposerMenu,
   positionFloatingMenu,
   setFloatingMenuOpen,
 } from "./setupHandlers/controllers/menuController";
@@ -1178,7 +1182,7 @@ export function setupHandlers(
       closeModelMenu();
       return;
     }
-    positionFloatingMenu(body, modelMenu, modelBtn);
+    positionComposerMenu(body, modelMenu, modelBtn);
   };
   const ensureClaudeModelCatalogLoaded = (force = false): Promise<void> => {
     if (!isClaudeConversationSystem()) return Promise.resolve();
@@ -1291,7 +1295,7 @@ export function setupHandlers(
     updateReasoningButton();
     if (reasoningMenu && reasoningBtn && isFloatingMenuOpen(reasoningMenu)) {
       rebuildReasoningMenu();
-      positionFloatingMenu(body, reasoningMenu, reasoningBtn);
+      positionComposerMenu(body, reasoningMenu, reasoningBtn);
     }
     if (!modelMenu || !modelBtn || !isFloatingMenuOpen(modelMenu)) return;
     rebuildModelMenu();
@@ -1299,7 +1303,7 @@ export function setupHandlers(
       closeModelMenu();
       return;
     }
-    positionFloatingMenu(body, modelMenu, modelBtn);
+    positionComposerMenu(body, modelMenu, modelBtn);
   };
   const ensureCodexModelCatalogLoaded = (force = false): Promise<void> => {
     if (!isCodexConversationSystem()) return Promise.resolve();
@@ -2359,6 +2363,21 @@ export function setupHandlers(
         onJumpToLatest: () => {
           if (item) requestChatScrollFollowBottom(body, item, chatBox);
         },
+      }),
+    );
+  }
+
+  const floatingPanel = body.querySelector<HTMLElement>("#llm-main");
+  const floatingShortcuts = body.querySelector<HTMLElement>("#llm-shortcuts");
+  const floatingComposer = floatingPanel?.querySelector<HTMLElement>(
+    ":scope > .llm-input-section",
+  );
+  if (floatingPanel && floatingShortcuts && floatingComposer) {
+    panelLifecycle.add(
+      bindFloatingComposer({
+        panel: floatingPanel,
+        shortcuts: floatingShortcuts,
+        composer: floatingComposer,
       }),
     );
   }
@@ -5116,7 +5135,7 @@ export function setupHandlers(
         viewportOffsetTop:
           (Number.parseFloat(
             win?.getComputedStyle(chatBox)?.scrollPaddingTop || "0",
-          ) || 0) + coveredTopOf(chatBox),
+          ) || 0) + getChatCoveredTop(chatBox),
       });
     if (!navigated) {
       try {
@@ -5917,11 +5936,6 @@ export function setupHandlers(
     const { groupedChoices, selectedEntryId } = getSelectedModelInfo();
 
     modelMenu.innerHTML = "";
-    appendDropdownInstruction(
-      modelMenu,
-      t("Select model"),
-      "llm-model-menu-hint",
-    );
     appendClaudeModelCatalogStatus(modelMenu);
     appendCodexModelCatalogStatus(modelMenu);
     codexDirectController?.appendCatalogStatus({
@@ -5945,12 +5959,11 @@ export function setupHandlers(
           "llm-response-menu-item llm-model-option",
           {
             type: "button",
-            textContent: isSelected
-              ? `\u2713 ${entry.displayModelLabel || "default"}`
-              : entry.displayModelLabel || "default",
+            textContent: entry.displayModelLabel || "default",
             title: getModelOptionTitle(entry),
           },
         );
+        option.classList.toggle(MENU_OPTION_SELECTED_CLASS, isSelected);
         option.dataset.entryId = entry.entryId;
         if (entry.catalogAvailability === "saved-unavailable") {
           option.disabled = true;
@@ -6201,12 +6214,11 @@ export function setupHandlers(
           "llm-response-menu-item llm-model-option",
           {
             type: "button",
-            textContent: isSelected
-              ? `\u2713 ${entry.displayModelLabel || "default"}`
-              : entry.displayModelLabel || "default",
+            textContent: entry.displayModelLabel || "default",
             title: getModelOptionTitle(entry),
           },
         );
+        option.classList.toggle(MENU_OPTION_SELECTED_CLASS, isSelected);
         if (entry.catalogAvailability === "saved-unavailable") {
           option.disabled = true;
           option.classList.add("llm-model-option-disabled");
@@ -6786,11 +6798,12 @@ export function setupHandlers(
         "llm-response-menu-item llm-reasoning-option",
         {
           type: "button",
-          textContent:
-            params.currentValue.toLowerCase() === choice.value.toLowerCase()
-              ? `\u2713 ${choice.label}`
-              : choice.label,
+          textContent: choice.label,
         },
+      );
+      option.classList.toggle(
+        MENU_OPTION_SELECTED_CLASS,
+        params.currentValue.toLowerCase() === choice.value.toLowerCase(),
       );
       const applySelection = (event: Event) => {
         if (!isPrimaryPointerEvent(event) || params.disabled) return;
@@ -6835,9 +6848,10 @@ export function setupHandlers(
           "llm-response-menu-item llm-reasoning-option",
           {
             type: "button",
-            textContent: isSelected ? `\u2713 ${mode.label}` : mode.label,
+            textContent: mode.label,
           },
         );
+        option.classList.toggle(MENU_OPTION_SELECTED_CLASS, isSelected);
         const applyMode = (e: Event) => {
           if (!isPrimaryPointerEvent(e)) return;
           e.preventDefault();
@@ -6865,11 +6879,6 @@ export function setupHandlers(
       return;
     }
 
-    appendDropdownInstruction(
-      reasoningMenu,
-      t("Reasoning level"),
-      "llm-reasoning-menu-section",
-    );
     if (isClaudeConversationSystem()) {
       const claudeModes: Array<{
         value: "auto" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -6890,9 +6899,12 @@ export function setupHandlers(
           "llm-response-menu-item llm-reasoning-option",
           {
             type: "button",
-            textContent:
-              currentMode === mode.value ? `\u2713 ${mode.label}` : mode.label,
+            textContent: mode.label,
           },
+        );
+        option.classList.toggle(
+          MENU_OPTION_SELECTED_CLASS,
+          currentMode === mode.value,
         );
         const applyClaudeSelection = (e: Event) => {
           if (!isPrimaryPointerEvent(e)) return;
@@ -6958,16 +6970,17 @@ export function setupHandlers(
         "llm-response-menu-item llm-reasoning-option",
         {
           type: "button",
-          textContent:
-            selectedLevel === level
-              ? `\u2713 ${getReasoningLevelDisplayLabel(level, provider, currentModel, options)}`
-              : getReasoningLevelDisplayLabel(
-                  level,
-                  provider,
-                  currentModel,
-                  options,
-                ),
+          textContent: getReasoningLevelDisplayLabel(
+            level,
+            provider,
+            currentModel,
+            options,
+          ),
         },
+      );
+      option.classList.toggle(
+        MENU_OPTION_SELECTED_CLASS,
+        selectedLevel === level,
       );
       if (optionState.enabled) {
         const applyReasoningSelection = (e: Event) => {
@@ -8919,7 +8932,7 @@ export function setupHandlers(
       closeModelMenu();
       return;
     }
-    positionFloatingMenu(body, modelMenu, modelBtn);
+    positionComposerMenu(body, modelMenu, modelBtn);
     setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, true);
   };
 
@@ -8943,7 +8956,7 @@ export function setupHandlers(
       closeReasoningMenu();
       return;
     }
-    positionFloatingMenu(body, reasoningMenu, reasoningBtn);
+    positionComposerMenu(body, reasoningMenu, reasoningBtn);
     setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, true);
   };
 
