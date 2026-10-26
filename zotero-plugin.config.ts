@@ -4,6 +4,7 @@ import { defineConfig } from "zotero-plugin-scaffold";
 import pkg from "./package.json";
 import { writeClaudeBridgeNotices } from "./scripts/claude-bridge-notices.mjs";
 import { patchGeneratedWorkflowTestReporter } from "./scripts/workflow-test-reporter.mjs";
+import { applyWorkflowTestSelection } from "./scripts/workflow-test-selection.mjs";
 
 const webChatLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_WEBCHAT_LIVE === "1";
 // Live agent tests call a real model with the user's own credentials, so they
@@ -121,7 +122,9 @@ export default defineConfig({
             : "test"),
     ...(workflowTestsEnabled
       ? {
-          abortOnFail: !agentLiveTestsEnabled,
+          // Locally the first failure stops the run, for a fast answer. CI
+          // runs every test so one failure does not hide the rest.
+          abortOnFail: !agentLiveTestsEnabled && !process.env.CI,
           // A live agent turn does real model round trips and real library
           // writes, so it needs far longer than a UI workflow test.
           mocha: {
@@ -156,7 +159,10 @@ export default defineConfig({
           await cp(prefsSnapshot, ".scaffold/test/profile/prefs.js");
         }
       },
-      "test:bundleTests": () => patchGeneratedWorkflowTestReporter(),
+      "test:bundleTests": async () => {
+        await patchGeneratedWorkflowTestReporter();
+        await applyWorkflowTestSelection();
+      },
     },
     waitForPlugin: `() => Zotero.${pkg.config.addonInstance}.data.initialized`,
   },

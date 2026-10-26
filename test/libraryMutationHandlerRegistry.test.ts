@@ -290,7 +290,7 @@ describe("library mutation handler registry", function () {
     assert.isUndefined(view.savedSearch(99));
   });
 
-  it("classifies 10k and 50k bulk replay state in linear time", function () {
+  it("classifies 10k and 50k bulk replay state in linear time @speed", function () {
     this.timeout(10_000);
     const measure = (size: number): number => {
       const state = {
