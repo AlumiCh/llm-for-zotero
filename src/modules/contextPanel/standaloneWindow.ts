@@ -34,10 +34,18 @@ import {
   getLastUsedUpstreamGlobalConversationKey,
   getStandaloneSidebarWidthPref,
   getStandalonePinnedPapersPref,
+  getStandaloneSidebarCollapsedGroupsPref,
+  getStandaloneSidebarGroupOrderPref,
+  getStandaloneSidebarSectionOptionsPref,
+  getStandaloneSidebarPinnedCollapsedPref,
   getLockedGlobalConversationKey,
   setLockedGlobalConversationKey,
   setStandaloneSidebarWidthPref,
   setStandalonePinnedPapersPref,
+  setStandaloneSidebarCollapsedGroupsPref,
+  setStandaloneSidebarGroupOrderPref,
+  setStandaloneSidebarSectionOptionsPref,
+  setStandaloneSidebarPinnedCollapsedPref,
 } from "./prefHelpers";
 import {
   clearStandaloneSelection,
@@ -104,7 +112,6 @@ import {
 import {
   formatGlobalHistoryTimestamp,
   getHistoryRowRuntimeLabel,
-  groupHistoryEntriesByDay,
   isOrphanHistoryEntry,
   maybeSelectPaperHistoryTarget,
   normalizeConversationTitleSeed,
@@ -204,6 +211,18 @@ import {
   setStandaloneSidebarState,
 } from "./standaloneSidebarView";
 import { installStandaloneSidebarFlyout } from "./standaloneSidebarFlyout";
+import {
+  formatStandaloneSidebarShortDate,
+  getStandaloneSidebarEntryTime,
+  getStandaloneSidebarGroupLabel,
+  getStandaloneSidebarSectionOptions,
+  groupStandaloneSidebarEntries,
+  moveStandaloneSidebarGroup,
+  sortStandaloneSidebarEntries,
+  type StandaloneSidebarGroupKey,
+  type StandaloneSidebarSortOrder,
+} from "./standaloneSidebarSort";
+import { installStandaloneSidebarGroupDrag } from "./standaloneSidebarGroupDrag";
 import { releaseInlineEdit } from "./inlineEditState";
 import { pluginStylesheetHref } from "../../utils/pluginReload";
 import { createPluginUpdateController } from "../pluginUpdate";
@@ -369,6 +388,7 @@ type SidebarConv = {
   conversationSystem?: ConversationSystem;
   libraryID?: number;
   lastActivityAt: number;
+  createdAt?: number;
   title?: string;
   userTurnCount?: number;
   sessionVersion?: number;
@@ -1345,6 +1365,7 @@ export function openStandaloneChat(options?: {
         kind: entry.kind,
         libraryID: entry.libraryID,
         lastActivityAt: entry.lastActivityAt || entry.createdAt || 0,
+        createdAt: entry.createdAt || undefined,
         title: entry.title,
         userTurnCount: entry.userTurnCount,
         sessionVersion: entry.sessionVersion,
@@ -2107,7 +2128,257 @@ export function openStandaloneChat(options?: {
           singleSystem: Boolean(resolveActiveNoteSession(activeItem)),
         });
 
+      // Agent / Codex / Claude sections: their order, which are folded, each
+      // one's own sort and dates, and the list last drawn (so a change
+      // redraws without a reload).
+      let sidebarGroupOrder = getStandaloneSidebarGroupOrderPref();
+      const sidebarCollapsedGroups = new Set(
+        getStandaloneSidebarCollapsedGroupsPref(),
+      );
+      const sidebarSectionOptions = getStandaloneSidebarSectionOptionsPref();
+      let lastSidebarConversations: SidebarConv[] | null = null;
+      // The section whose sort button opened the shared sort menu.
+      let sidebarSortMenuKey: StandaloneSidebarGroupKey | null = null;
+      const sidebarSortButtonFor = (key: StandaloneSidebarGroupKey | null) =>
+        key
+          ? (sidebarList.querySelector(
+              `.llm-standalone-conv-group[data-group-key="${key}"] .llm-standalone-conv-group-sort`,
+            ) as HTMLButtonElement | null)
+          : null;
+      const syncSidebarSortControls = (key: StandaloneSidebarGroupKey) => {
+        const options = getStandaloneSidebarSectionOptions(
+          sidebarSectionOptions,
+          key,
+        );
+        for (const [order, item] of sidebarView.historySortItems) {
+          item.setAttribute("aria-checked", String(order === options.sort));
+        }
+        sidebarView.historyShowDatesItem.setAttribute(
+          "aria-checked",
+          String(options.showDates),
+        );
+      };
+      const setSidebarSortMenuOpen = (
+        open: boolean,
+        key: StandaloneSidebarGroupKey | null = sidebarSortMenuKey,
+      ) => {
+        const menu = sidebarView.historySortMenu;
+        sidebarSortButtonFor(sidebarSortMenuKey)?.setAttribute(
+          "aria-expanded",
+          "false",
+        );
+        if (!open || !key) {
+          menu.hidden = true;
+          sidebarSortMenuKey = null;
+          return;
+        }
+        const button = sidebarSortButtonFor(key);
+        if (!button) return;
+        sidebarSortMenuKey = key;
+        syncSidebarSortControls(key);
+        menu.hidden = false;
+        button.setAttribute("aria-expanded", "true");
+        const panelRect = sidebarPanel.getBoundingClientRect();
+        const buttonRect = button.getBoundingClientRect();
+        menu.style.top = `${Math.round(buttonRect.bottom - panelRect.top + 4)}px`;
+        menu.style.right = `${Math.max(
+          4,
+          Math.round(panelRect.right - buttonRect.right),
+        )}px`;
+        sidebarView.historySortItems
+          .get(
+            getStandaloneSidebarSectionOptions(sidebarSectionOptions, key).sort,
+          )
+          ?.focus();
+      };
+      const redrawSidebarSections = (focusKey?: StandaloneSidebarGroupKey) => {
+        if (isInWebChatMode) return;
+        if (!lastSidebarConversations) {
+          scheduleStandaloneSidebarRender();
+          return;
+        }
+        renderSidebarItems(lastSidebarConversations);
+        if (focusKey) {
+          (
+            sidebarList.querySelector(
+              `.llm-standalone-conv-group[data-group-key="${focusKey}"]`,
+            ) as HTMLElement | null
+          )?.focus();
+        }
+      };
+      sidebarView.historySortMenu.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const key = sidebarSortMenuKey;
+        const item = (event.target as Element | null)?.closest?.(
+          ".llm-standalone-history-sort-item",
+        ) as HTMLButtonElement | null;
+        if (!item || !key) return;
+        const options = {
+          ...getStandaloneSidebarSectionOptions(sidebarSectionOptions, key),
+        };
+        if (item.dataset.sortOrder) {
+          options.sort = item.dataset.sortOrder as StandaloneSidebarSortOrder;
+        } else if (item.dataset.sortToggle === "dates") {
+          options.showDates = !options.showDates;
+        }
+        sidebarSectionOptions.set(key, options);
+        setStandaloneSidebarSectionOptionsPref(sidebarSectionOptions);
+        if (item.dataset.sortOrder) {
+          redrawSidebarSections();
+          sidebarSortButtonFor(key)?.focus();
+        } else {
+          // Keep the menu open on its toggle, over the redrawn list.
+          redrawSidebarSections();
+          setSidebarSortMenuOpen(true, key);
+          sidebarView.historyShowDatesItem.focus();
+        }
+      });
+      sidebarView.historySortMenu.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          const key = sidebarSortMenuKey;
+          setSidebarSortMenuOpen(false);
+          sidebarSortButtonFor(key)?.focus();
+          return;
+        }
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+        event.preventDefault();
+        const items = Array.from(
+          sidebarView.historySortMenu.querySelectorAll(
+            ".llm-standalone-history-sort-item",
+          ),
+        ) as HTMLButtonElement[];
+        const index = items.indexOf(doc.activeElement as HTMLButtonElement);
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        items[(index + step + items.length) % items.length]?.focus();
+      });
+      doc.addEventListener("mousedown", (event) => {
+        const target = event.target as Element | null;
+        if (
+          target &&
+          (sidebarView.historySortMenu.contains(target) ||
+            target.closest?.(".llm-standalone-conv-group-sort"))
+        ) {
+          return;
+        }
+        setSidebarSortMenuOpen(false);
+      });
+
+      // Section labels: click (or Enter) folds the section, the sort button
+      // at the end sets its order, and dragging a label (or Alt+Up/Down)
+      // moves the section.
+      const toggleSidebarGroup = (key: StandaloneSidebarGroupKey) => {
+        if (sidebarCollapsedGroups.has(key)) sidebarCollapsedGroups.delete(key);
+        else sidebarCollapsedGroups.add(key);
+        setStandaloneSidebarCollapsedGroupsPref(
+          Array.from(sidebarCollapsedGroups),
+        );
+        redrawSidebarSections(key);
+      };
+      // A section's "+": a new chat in the window's own mode works like the
+      // new chat button; another mode switches the window to it, fresh.
+      const startSidebarSectionChat = (key: StandaloneSidebarGroupKey) => {
+        if (cancelled || newWin.closed) return;
+        if (key === currentConversationSystem) {
+          iconNewChat.click();
+          return;
+        }
+        void switchConversationSystem(key, { forceFresh: true });
+      };
+      const createSidebarGroupHeader = (
+        key: StandaloneSidebarGroupKey,
+        count: number,
+      ): HTMLDivElement => {
+        const label = t(getStandaloneSidebarGroupLabel(key));
+        const header = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
+        header.className = "llm-standalone-conv-group";
+        header.dataset.groupKey = key;
+        header.tabIndex = 0;
+        header.setAttribute("role", "button");
+        const collapsed = sidebarCollapsedGroups.has(key);
+        header.setAttribute("aria-expanded", String(!collapsed));
+        if (collapsed) header.dataset.collapsed = "true";
+        header.title = t(
+          collapsed
+            ? "Click to expand, drag to reorder"
+            : "Click to collapse, drag to reorder",
+        );
+        header.addEventListener("click", () => toggleSidebarGroup(key));
+        header.addEventListener("keydown", (event) => {
+          if (event.target !== header) return;
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          toggleSidebarGroup(key);
+        });
+        const name = doc.createElementNS(HTML_NS, "span") as HTMLSpanElement;
+        name.className = "llm-standalone-conv-group-name";
+        name.textContent = label;
+        const chevron = doc.createElementNS(HTML_NS, "span") as HTMLSpanElement;
+        chevron.className = "llm-standalone-conv-group-chevron";
+        chevron.setAttribute("aria-hidden", "true");
+        const countSpan = doc.createElementNS(
+          HTML_NS,
+          "span",
+        ) as HTMLSpanElement;
+        countSpan.className = "llm-standalone-conv-group-count";
+        countSpan.textContent = String(count);
+        const sortButton = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
+        sortButton.className = "llm-standalone-conv-group-sort";
+        sortButton.type = "button";
+        sortButton.title = t("Sort");
+        sortButton.setAttribute("aria-label", `${t("Sort")}: ${label}`);
+        sortButton.setAttribute("aria-haspopup", "menu");
+        sortButton.setAttribute("aria-expanded", "false");
+        sortButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          setSidebarSortMenuOpen(sidebarSortMenuKey !== key, key);
+        });
+        // "+" starts a new chat in this section's mode.
+        const newButton = doc.createElementNS(
+          HTML_NS,
+          "button",
+        ) as HTMLButtonElement;
+        newButton.className = "llm-standalone-conv-group-new";
+        newButton.type = "button";
+        newButton.title = `${t("New chat")}: ${label}`;
+        newButton.setAttribute("aria-label", `${t("New chat")}: ${label}`);
+        newButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          startSidebarSectionChat(key);
+        });
+        header.setAttribute(
+          "aria-label",
+          `${label} (${count}). ${t("Alt+Up or Alt+Down to reorder")}`,
+        );
+        header.append(name, countSpan, chevron, sortButton, newButton);
+        return header;
+      };
+      installStandaloneSidebarGroupDrag({
+        list: sidebarList,
+        onMove: (key, toIndex) => {
+          const visible = Array.from(
+            sidebarList.querySelectorAll(".llm-standalone-conv-group"),
+          ).map(
+            (el) => (el as HTMLElement).dataset.groupKey,
+          ) as StandaloneSidebarGroupKey[];
+          sidebarGroupOrder = moveStandaloneSidebarGroup(
+            sidebarGroupOrder,
+            key as StandaloneSidebarGroupKey,
+            toIndex,
+            visible,
+          );
+          setStandaloneSidebarGroupOrderPref(sidebarGroupOrder);
+          redrawSidebarSections(key as StandaloneSidebarGroupKey);
+        },
+      });
+
       const renderSidebarItems = (conversations: SidebarConv[]) => {
+        setSidebarSortMenuOpen(false);
+        lastSidebarConversations = conversations;
         clearSidebarList();
         const visibleConversations =
           collapseDuplicateReusableConversationDrafts({
@@ -2134,19 +2405,35 @@ export function openStandaloneChat(options?: {
           return;
         }
 
-        const groups = groupHistoryEntriesByDay(visibleConversations, {
-          translate: t,
-        });
-        for (const group of groups) {
-          const dayLabel = doc.createElementNS(
+        const now = Date.now();
+        const sections = groupStandaloneSidebarEntries(
+          visibleConversations,
+          sidebarGroupOrder,
+          currentConversationSystem,
+        );
+        for (const section of sections) {
+          if (section.key) {
+            sidebarList.appendChild(
+              createSidebarGroupHeader(section.key, section.items.length),
+            );
+            if (sidebarCollapsedGroups.has(section.key)) continue;
+          }
+          // The section's rows sit in one box, so its guide line can show
+          // while the mouse is over the section.
+          const sectionRowsBox = doc.createElementNS(
             HTML_NS,
             "div",
           ) as HTMLDivElement;
-          dayLabel.className = "llm-standalone-day-label";
-          dayLabel.textContent = group.label;
-          sidebarList.appendChild(dayLabel);
-
-          for (const conv of group.items) {
+          sectionRowsBox.className = "llm-standalone-conv-section-rows";
+          sidebarList.appendChild(sectionRowsBox);
+          const sectionOptions = getStandaloneSidebarSectionOptions(
+            sidebarSectionOptions,
+            section.key,
+          );
+          for (const conv of sortStandaloneSidebarEntries(
+            section.items,
+            sectionOptions.sort,
+          )) {
             const btn = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
             btn.className = "llm-standalone-conv-item";
             if (conv.conversationKey === activeConversationKey) {
@@ -2192,21 +2479,30 @@ export function openStandaloneChat(options?: {
               ),
               titleSpan,
             );
-            const runtimeLabel = getHistoryRowRuntimeLabel(
-              conv.conversationSystem || currentConversationSystem,
-            );
-            if (runtimeLabel) {
-              const labelSpan = doc.createElementNS(
-                HTML_NS,
-                "span",
-              ) as HTMLSpanElement;
-              labelSpan.className = "llm-history-runtime-label";
-              labelSpan.textContent = runtimeLabel;
-              btn.appendChild(labelSpan);
+            // The section label names the runtime, so rows carry no tag.
+            if (sectionOptions.showDates) {
+              const time = getStandaloneSidebarEntryTime(
+                conv,
+                sectionOptions.sort,
+              );
+              const dateText = formatStandaloneSidebarShortDate(time, {
+                now,
+                translate: t,
+              });
+              if (dateText) {
+                const dateSpan = doc.createElementNS(
+                  HTML_NS,
+                  "span",
+                ) as HTMLSpanElement;
+                dateSpan.className = "llm-standalone-conv-date";
+                dateSpan.textContent = dateText;
+                dateSpan.title = new Date(time).toLocaleString();
+                btn.appendChild(dateSpan);
+              }
             }
             btn.append(renameBtn, deleteBtn);
             btn.title = conv.title || t("Untitled chat");
-            sidebarList.appendChild(btn);
+            sectionRowsBox.appendChild(btn);
           }
         }
       };
@@ -4833,6 +5129,34 @@ export function openStandaloneChat(options?: {
         sidebarView.pinnedRegion.hidden = isInWebChatMode;
         sidebarView.pinnedClear.hidden = shownCount === 0;
       };
+      // "Pinned" folds like an agent section; its fold is remembered.
+      let pinnedCollapsed = getStandaloneSidebarPinnedCollapsedPref();
+      const syncPinnedFold = () => {
+        const header = sidebarView.pinnedHeader;
+        header.setAttribute("aria-expanded", String(!pinnedCollapsed));
+        if (pinnedCollapsed) header.dataset.collapsed = "true";
+        else delete header.dataset.collapsed;
+        header.title = t(
+          pinnedCollapsed ? "Click to expand" : "Click to collapse",
+        );
+        sidebarView.pinnedList.hidden = pinnedCollapsed;
+      };
+      const togglePinnedFold = () => {
+        pinnedCollapsed = !pinnedCollapsed;
+        setStandaloneSidebarPinnedCollapsedPref(pinnedCollapsed);
+        syncPinnedFold();
+      };
+      syncPinnedFold();
+      sidebarView.pinnedHeader.addEventListener("click", (event) => {
+        if ((event.target as Element | null)?.closest?.("button")) return;
+        togglePinnedFold();
+      });
+      sidebarView.pinnedHeader.addEventListener("keydown", (event) => {
+        if (event.target !== sidebarView.pinnedHeader) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        togglePinnedFold();
+      });
       sidebarView.pinnedClear.addEventListener("click", () => {
         if (cancelled || !pinnedPaperIDs.length) return;
         savePinnedPapers([]);

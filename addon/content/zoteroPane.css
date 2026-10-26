@@ -3327,7 +3327,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 4px 8px 12px;
+  padding: 0 8px 12px;
 }
 
 /* "Pinned papers": above the history list, in its row styles. */
@@ -3341,14 +3341,6 @@
 
 .llm-standalone-pinned-region[hidden] {
   display: none;
-}
-
-/* Same left edge as the history list below (8px region + 10px label). */
-.llm-standalone-pinned-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 10px;
 }
 
 .llm-standalone-pinned-label-text {
@@ -3437,19 +3429,286 @@
   padding: 14px 10px 6px;
 }
 
+.llm-standalone-history-sort-menu {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  max-width: calc(100% - 8px);
+  padding: 4px;
+  box-sizing: border-box;
+  background: var(--llm-popup-surface-bg);
+  border: 1px solid var(--llm-popup-surface-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.llm-standalone-history-sort-menu[hidden] {
+  display: none;
+}
+
+.llm-standalone-history-sort-menu-title {
+  padding: 5px 8px 3px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11, 11px);
+  font-weight: 600;
+}
+
+.llm-standalone-history-sort-item {
+  appearance: none;
+  -moz-appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: var(--llm-fs-12, 12px);
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* The check mark's column is kept for every row so the names line up. */
+.llm-standalone-history-sort-item::before {
+  content: "";
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  background-color: var(--color-accent);
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.2 5 8.5 9.5 3.5'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  visibility: hidden;
+}
+
+.llm-standalone-history-sort-item[aria-checked="true"]::before {
+  visibility: visible;
+}
+
+.llm-standalone-history-sort-item:hover,
+.llm-standalone-history-sort-item:focus-visible {
+  background: var(--fill-quinary);
+  outline: none;
+}
+
+/* "Group by agent": a label over each runtime's chats, in the row font
+ * but dimmed so it reads as a heading, not a chat. Click folds the
+ * section (the triangle shows on hover, and stays while folded); drag it
+ * (or Alt+Up / Alt+Down) to move the section. */
+.llm-standalone-conv-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 14px 0 2px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: var(--fill-secondary);
+  font-size: var(--llm-standalone-ui-font-size);
+  font-weight: 500;
+  line-height: var(--llm-standalone-ui-line-height);
+  cursor: pointer;
+  user-select: none;
+  -moz-user-select: none;
+}
+
+.llm-standalone-conv-group-chevron {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  background-color: currentColor;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='%23fff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4 5 6.5 7.5 4'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  visibility: hidden;
+  transition: transform 120ms ease;
+}
+
+.llm-standalone-conv-group[data-collapsed="true"]
+  .llm-standalone-conv-group-chevron {
+  transform: rotate(-90deg);
+  visibility: visible;
+}
+
+.llm-standalone-conv-group:hover .llm-standalone-conv-group-chevron,
+.llm-standalone-conv-group:focus-visible .llm-standalone-conv-group-chevron {
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llm-standalone-conv-group-chevron {
+    transition: none;
+  }
+}
+
+.llm-standalone-conv-group:first-child {
+  margin-top: 10px;
+}
+
+.llm-standalone-conv-group:first-child[data-drop="before"]::before {
+  top: -3px;
+}
+
+.llm-standalone-conv-group-count {
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11, 11px);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.llm-standalone-conv-group:hover,
+.llm-standalone-conv-group:focus-visible {
+  color: var(--fill-primary);
+  outline: none;
+}
+
+.llm-standalone-conv-group:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+/* A section's sort button: at the label's end, shown on hover or focus,
+ * and kept while its menu is open. */
+.llm-standalone-conv-group-sort,
+.llm-standalone-conv-group-new {
+  appearance: none;
+  -moz-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: -2px 0 -2px auto;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.llm-standalone-conv-group-sort::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  background-color: currentColor;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23fff' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M2.5 4.5h11M4.5 8h7M6.5 11.5h3'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+
+.llm-standalone-conv-group-new {
+  margin: -2px -4px -2px 2px;
+}
+
+.llm-standalone-conv-group-new::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  background-color: currentColor;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23fff' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M8 3v10M3 8h10'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+
+.llm-standalone-conv-group:hover .llm-standalone-conv-group-sort,
+.llm-standalone-conv-group:focus-within .llm-standalone-conv-group-sort,
+.llm-standalone-conv-group-sort[aria-expanded="true"],
+.llm-standalone-conv-group:hover .llm-standalone-conv-group-new,
+.llm-standalone-conv-group:focus-within .llm-standalone-conv-group-new {
+  visibility: visible;
+}
+
+.llm-standalone-conv-group-sort:hover,
+.llm-standalone-conv-group-sort[aria-expanded="true"],
+.llm-standalone-conv-group-new:hover {
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+}
+
+.llm-standalone-conv-group-sort:focus-visible,
+.llm-standalone-conv-group-new:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* "Pinned" uses the section label style; "Clear" sits at its end. */
+.llm-standalone-pinned-region > .llm-standalone-pinned-label {
+  margin-top: 10px;
+}
+
+.llm-standalone-pinned-label .llm-standalone-pinned-label-text {
+  flex: 0 1 auto;
+}
+
+.llm-standalone-pinned-label .llm-standalone-pinned-clear {
+  margin-inline-start: auto;
+  font-size: var(--llm-fs-11, 11px);
+}
+
+.llm-standalone-group-dragging,
+.llm-standalone-group-dragging * {
+  cursor: grabbing !important;
+}
+
+.llm-standalone-conv-group.dragging {
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+  cursor: grabbing;
+}
+
+/* Where the dragged section will land. */
+.llm-standalone-conv-group[data-drop="before"]::before,
+.llm-standalone-sidebar-list[data-drop-end]::after {
+  content: "";
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+}
+
+.llm-standalone-conv-group[data-drop="before"]::before {
+  position: absolute;
+  inset: -7px 8px auto;
+}
+
+.llm-standalone-sidebar-list[data-drop-end]::after {
+  margin: 6px 8px 0;
+}
+
+.llm-standalone-history-sort-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--llm-popup-surface-border);
+}
+
+/* Rows follow the Claude desktop list: no gaps, a little air above and
+ * below the title (8px each side of the line), and titles at about three
+ * quarters strength; hover and the open chat go full. */
 .llm-standalone-conv-item {
   appearance: none;
   -moz-appearance: none;
   display: flex;
   align-items: center;
   width: 100%;
-  min-height: var(--llm-standalone-item-row-height);
+  min-height: calc(var(--llm-standalone-ui-line-height) + 16px);
   padding: 0 10px;
   box-sizing: border-box;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   background: none;
-  color: var(--fill-primary);
+  color: color-mix(in srgb, var(--fill-primary) 78%, transparent);
   font-size: var(--llm-standalone-ui-font-size);
   text-align: left;
   cursor: pointer;
@@ -3482,6 +3741,22 @@
 
 .llm-standalone-conv-item > .llm-history-activity {
   margin-inline-end: 6px;
+}
+
+/* "Show dates": a short date at the row's end; rename and delete take its
+ * place on hover. */
+.llm-standalone-conv-date {
+  flex: 0 0 auto;
+  margin-inline-start: 6px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11, 11px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.llm-standalone-conv-item:hover > .llm-standalone-conv-date,
+.llm-standalone-conv-item:focus-within > .llm-standalone-conv-date {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3558,12 +3833,51 @@
 
 .llm-standalone-conv-item:hover {
   background: color-mix(in srgb, var(--fill-quinary) 80%, transparent);
+  color: var(--fill-primary);
 }
 
 .llm-standalone-conv-item.active {
   background: var(--fill-quinary);
   color: var(--fill-primary);
   font-weight: 500;
+}
+
+/* While the mouse is over a section (Pinned, Agent, Codex, Claude), a thin
+ * line runs down from under its label's first letter past its chats, so
+ * it is clear which section a chat belongs to. The chats sit a little in
+ * from the line. WebChat's list has no sections and keeps its rows. */
+.llm-standalone-pinned-list,
+.llm-standalone-conv-section-rows {
+  position: relative;
+  margin-inline-start: 10px;
+  padding-inline-start: 6px;
+}
+
+.llm-standalone-pinned-list::before,
+.llm-standalone-conv-section-rows::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  background: color-mix(in srgb, var(--fill-primary) 14%, transparent);
+  opacity: 0;
+  transition: opacity 150ms ease;
+  pointer-events: none;
+}
+
+.llm-standalone-pinned-region:hover .llm-standalone-pinned-list::before,
+.llm-standalone-conv-group:hover + .llm-standalone-conv-section-rows::before,
+.llm-standalone-conv-section-rows:hover::before {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llm-standalone-pinned-list::before,
+  .llm-standalone-conv-section-rows::before {
+    transition: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

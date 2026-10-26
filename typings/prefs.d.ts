@@ -12,6 +12,10 @@ declare namespace _ZoteroTypes {
       "sidebarLayout": string;
       "standaloneSidebarWidth": number;
       "standalonePinnedPapers": string;
+      "standaloneSidebarSectionOptions": string;
+      "standaloneSidebarPinnedCollapsed": boolean;
+      "standaloneSidebarGroupOrder": string;
+      "standaloneSidebarCollapsedGroups": string;
       "input": string;
       "apiBase": string;
       "apiKey": string;

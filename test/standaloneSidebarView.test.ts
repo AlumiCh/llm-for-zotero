@@ -125,10 +125,23 @@ describe("standalone sidebar view", function () {
       view.pinnedRegion,
       view.historyRegion,
       view.preferencesRegion,
+      view.historySortMenu,
     ]);
-    // "Pinned papers" always shows, just its label until a paper is
-    // pinned, and "Clear" on that label row once one is.
+    // No heading over the history list: its agent sections carry their
+    // own labels and sort buttons, which share one menu (closed at first).
+    assert.deepEqual(view.historyRegion.children, [view.undo, view.list]);
+    assert.isTrue(view.historySortMenu.hidden);
+    assert.equal(view.historyShowDatesItem.dataset.sortToggle, "dates");
+    assert.deepEqual(Array.from(view.historySortItems.keys()), [
+      "recent",
+      "created",
+      "title",
+    ]);
+    // "Pinned" always shows, just its label until a paper is pinned, and
+    // "Clear" on that label row once one is. The label folds the section.
     assert.notOk(view.pinnedRegion.hidden);
+    assert.equal(view.pinnedHeader.parentElement, view.pinnedRegion);
+    assert.equal(view.pinnedHeader.getAttribute("aria-expanded"), "true");
     assert.equal(view.pinnedList.parentElement, view.pinnedRegion);
     assert.isTrue(view.pinnedClear.hidden);
     assert.equal(view.pinnedClear.textContent, "Clear");

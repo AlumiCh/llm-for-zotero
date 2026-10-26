@@ -54,6 +54,15 @@ import {
   serializePinnedPaperIDs,
 } from "./standalonePinnedPapers";
 import {
+  parseStandaloneSidebarGroupKeys,
+  parseStandaloneSidebarGroupOrder,
+  parseStandaloneSidebarSectionOptions,
+  serializeStandaloneSidebarGroupOrder,
+  serializeStandaloneSidebarSectionOptions,
+  type StandaloneSidebarGroupKey,
+  type StandaloneSidebarSectionOptions,
+} from "./standaloneSidebarSort";
+import {
   forgetPaperRestoreTarget,
   getPaperRestoreTarget,
   rememberPaperRestoreTarget,
@@ -105,6 +114,13 @@ const LAST_GLOBAL_CONVERSATION_MAP_PREF_KEY = "lastUsedGlobalConversationMap";
 const PANEL_FONT_SCALE_PREF_KEY = "panelFontScale";
 const STANDALONE_SIDEBAR_WIDTH_PREF_KEY = "standaloneSidebarWidth";
 const STANDALONE_PINNED_PAPERS_PREF_KEY = "standalonePinnedPapers";
+const STANDALONE_SIDEBAR_GROUP_ORDER_PREF_KEY = "standaloneSidebarGroupOrder";
+const STANDALONE_SIDEBAR_SECTION_OPTIONS_PREF_KEY =
+  "standaloneSidebarSectionOptions";
+const STANDALONE_SIDEBAR_PINNED_COLLAPSED_PREF_KEY =
+  "standaloneSidebarPinnedCollapsed";
+const STANDALONE_SIDEBAR_COLLAPSED_GROUPS_PREF_KEY =
+  "standaloneSidebarCollapsedGroups";
 const SHORTCUT_DEFAULTS_MIGRATION_PREF_KEY = "shortcutDefaultsMigrationVersion";
 const SHORTCUT_DEFAULTS_MIGRATION_VERSION = 2;
 const MESSAGE_LINE_SPACING_PREF_KEY = "messageLineSpacing";
@@ -610,6 +626,85 @@ export function setStandalonePinnedPapersPref(ids: readonly number[]): void {
   getZoteroPrefs()?.set?.(
     `${config.prefsPrefix}.${STANDALONE_PINNED_PAPERS_PREF_KEY}`,
     serializePinnedPaperIDs(ids),
+    true,
+  );
+}
+
+/** Each "Conversations" section's own order and "Show dates" choice. */
+export function getStandaloneSidebarSectionOptionsPref(): Map<
+  StandaloneSidebarGroupKey,
+  StandaloneSidebarSectionOptions
+> {
+  return parseStandaloneSidebarSectionOptions(
+    getZoteroPrefs()?.get?.(
+      `${config.prefsPrefix}.${STANDALONE_SIDEBAR_SECTION_OPTIONS_PREF_KEY}`,
+      true,
+    ),
+  );
+}
+
+export function setStandaloneSidebarSectionOptionsPref(
+  options: ReadonlyMap<
+    StandaloneSidebarGroupKey,
+    StandaloneSidebarSectionOptions
+  >,
+): void {
+  getZoteroPrefs()?.set?.(
+    `${config.prefsPrefix}.${STANDALONE_SIDEBAR_SECTION_OPTIONS_PREF_KEY}`,
+    serializeStandaloneSidebarSectionOptions(options),
+    true,
+  );
+}
+
+/** Whether the "Pinned" section is folded closed. */
+export function getStandaloneSidebarPinnedCollapsedPref(): boolean {
+  return getBoolPref(STANDALONE_SIDEBAR_PINNED_COLLAPSED_PREF_KEY, false);
+}
+
+export function setStandaloneSidebarPinnedCollapsedPref(value: boolean): void {
+  getZoteroPrefs()?.set?.(
+    `${config.prefsPrefix}.${STANDALONE_SIDEBAR_PINNED_COLLAPSED_PREF_KEY}`,
+    Boolean(value),
+    true,
+  );
+}
+
+/** The order of those sections, as the user last dragged them. */
+export function getStandaloneSidebarGroupOrderPref(): StandaloneSidebarGroupKey[] {
+  return parseStandaloneSidebarGroupOrder(
+    getZoteroPrefs()?.get?.(
+      `${config.prefsPrefix}.${STANDALONE_SIDEBAR_GROUP_ORDER_PREF_KEY}`,
+      true,
+    ),
+  );
+}
+
+export function setStandaloneSidebarGroupOrderPref(
+  order: readonly StandaloneSidebarGroupKey[],
+): void {
+  getZoteroPrefs()?.set?.(
+    `${config.prefsPrefix}.${STANDALONE_SIDEBAR_GROUP_ORDER_PREF_KEY}`,
+    serializeStandaloneSidebarGroupOrder(order),
+    true,
+  );
+}
+
+/** The "Group by agent" sections the user folded closed. */
+export function getStandaloneSidebarCollapsedGroupsPref(): StandaloneSidebarGroupKey[] {
+  return parseStandaloneSidebarGroupKeys(
+    getZoteroPrefs()?.get?.(
+      `${config.prefsPrefix}.${STANDALONE_SIDEBAR_COLLAPSED_GROUPS_PREF_KEY}`,
+      true,
+    ),
+  );
+}
+
+export function setStandaloneSidebarCollapsedGroupsPref(
+  keys: readonly StandaloneSidebarGroupKey[],
+): void {
+  getZoteroPrefs()?.set?.(
+    `${config.prefsPrefix}.${STANDALONE_SIDEBAR_COLLAPSED_GROUPS_PREF_KEY}`,
+    parseStandaloneSidebarGroupKeys(keys.join(",")).join(","),
     true,
   );
 }
