@@ -810,6 +810,14 @@ async function shutdownPlugin(reason: PluginLifecycleReason): Promise<void> {
   } catch (error) {
     appLogger.debug("LLM index: shutdown skipped", error);
   }
+  await runShutdownStep("mineru local server", async () => {
+    try {
+      const { stopMineruServer } = await import("./utils/mineruServerManager");
+      await stopMineruServer("plugin_shutdown");
+    } catch (error) {
+      appLogger.debug("MinerU server: shutdown skipped", error);
+    }
+  });
   await runShutdownStep("paper conversation restore", async () => {
     unregisterPaperConversationRestoreNotifications();
     await shutdownPaperRestoreSelections();
