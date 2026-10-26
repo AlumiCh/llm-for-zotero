@@ -8140,9 +8140,7 @@ function readStandalonePinnedPapers(
     edges: {
       pinnedLabel: leftEdge(".llm-standalone-pinned-label"),
       pinnedRow: leftEdge(".llm-standalone-pinned-paper"),
-      historyLabel: leftEdge(
-        ".llm-standalone-sidebar-list > .llm-standalone-day-label",
-      ),
+      historyLabel: leftEdge(".llm-standalone-history-label"),
       historyRow: leftEdge(
         ".llm-standalone-sidebar-list > .llm-standalone-conv-item",
       ),

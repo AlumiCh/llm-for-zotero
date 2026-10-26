@@ -3287,7 +3287,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 4px 8px 12px;
+  padding: 0 8px 12px;
 }
 
 /* "Pinned papers": above the history list, in its row styles. */
@@ -3397,6 +3397,151 @@
   padding: 14px 10px 6px;
 }
 
+/* "Conversations": the history list's label row, in the "Pinned papers"
+ * style, with the sort button at its end. It stays put while the list
+ * scrolls. */
+.llm-standalone-history-header {
+  flex: 0 0 auto;
+  padding: 0 8px;
+}
+
+.llm-standalone-history-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.llm-standalone-history-label-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-standalone-history-sort {
+  appearance: none;
+  -moz-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  margin: -3px -6px -3px 0;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fill-tertiary);
+  font: inherit;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  line-height: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.llm-standalone-history-sort::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  background-color: currentColor;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='%23fff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4 5 6.5 7.5 4'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+
+.llm-standalone-history-sort:hover,
+.llm-standalone-history-sort[aria-expanded="true"] {
+  color: var(--fill-primary);
+  background: var(--fill-quinary);
+}
+
+.llm-standalone-history-sort:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.llm-standalone-history-sort[hidden] {
+  display: none;
+}
+
+.llm-standalone-history-sort-menu {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  max-width: calc(100% - 8px);
+  padding: 4px;
+  box-sizing: border-box;
+  background: var(--llm-popup-surface-bg);
+  border: 1px solid var(--llm-popup-surface-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.llm-standalone-history-sort-menu[hidden] {
+  display: none;
+}
+
+.llm-standalone-history-sort-menu-title {
+  padding: 5px 8px 3px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11, 11px);
+  font-weight: 600;
+}
+
+.llm-standalone-history-sort-item {
+  appearance: none;
+  -moz-appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: var(--llm-fs-12, 12px);
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* The check mark's column is kept for every row so the names line up. */
+.llm-standalone-history-sort-item::before {
+  content: "";
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  background-color: var(--color-accent);
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.2 5 8.5 9.5 3.5'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  visibility: hidden;
+}
+
+.llm-standalone-history-sort-item[aria-checked="true"]::before {
+  visibility: visible;
+}
+
+.llm-standalone-history-sort-item:hover,
+.llm-standalone-history-sort-item:focus-visible {
+  background: var(--fill-quinary);
+  outline: none;
+}
+
+.llm-standalone-history-sort-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--llm-popup-surface-border);
+}
+
 .llm-standalone-conv-item {
   appearance: none;
   -moz-appearance: none;
@@ -3442,6 +3587,22 @@
 
 .llm-standalone-conv-item > .llm-history-activity {
   margin-inline-end: 6px;
+}
+
+/* "Show dates": a short date at the row's end; rename and delete take its
+ * place on hover. */
+.llm-standalone-conv-date {
+  flex: 0 0 auto;
+  margin-inline-start: 6px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11, 11px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.llm-standalone-conv-item:hover > .llm-standalone-conv-date,
+.llm-standalone-conv-item:focus-within > .llm-standalone-conv-date {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

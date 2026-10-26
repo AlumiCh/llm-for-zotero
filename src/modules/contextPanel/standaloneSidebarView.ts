@@ -1,4 +1,9 @@
 import { HTML_NS } from "../../utils/domHelpers";
+import {
+  getStandaloneSidebarSortMenuLabel,
+  STANDALONE_SIDEBAR_SORT_ORDERS,
+  type StandaloneSidebarSortOrder,
+} from "./standaloneSidebarSort";
 
 export type StandaloneSidebarState = "expanded" | "collapsed";
 
@@ -29,6 +34,14 @@ export type StandaloneSidebarView = {
   pinnedList: HTMLDivElement;
   pinnedClear: HTMLButtonElement;
   historyRegion: HTMLDivElement;
+  /** "Conversations" label row above the list, with the sort button. */
+  historyHeader: HTMLDivElement;
+  historySortButton: HTMLButtonElement;
+  historySortButtonLabel: HTMLSpanElement;
+  /** The sort button's menu; floats over the panel while open. */
+  historySortMenu: HTMLDivElement;
+  historySortItems: Map<StandaloneSidebarSortOrder, HTMLButtonElement>;
+  historyShowDatesItem: HTMLButtonElement;
   undo: HTMLDivElement;
   undoText: HTMLSpanElement;
   undoButton: HTMLButtonElement;
@@ -200,6 +213,91 @@ export function createStandaloneSidebarView(
     "llm-standalone-history-region",
   );
   historyRegion.id = "llm-standalone-history-region";
+
+  // Same label style as "Pinned papers"; the sort button sits at its end.
+  const historyHeader = createHtmlElement(
+    doc,
+    "div",
+    "llm-standalone-history-header",
+  );
+  const historyLabel = createHtmlElement(
+    doc,
+    "div",
+    "llm-standalone-day-label llm-standalone-history-label",
+  );
+  const historyLabelText = createHtmlElement(
+    doc,
+    "span",
+    "llm-standalone-history-label-text",
+  );
+  historyLabelText.textContent = translate("Conversations");
+  const historySortButton = createHtmlElement(
+    doc,
+    "button",
+    "llm-standalone-history-sort",
+  );
+  historySortButton.type = "button";
+  historySortButton.title = translate("Sort conversations");
+  historySortButton.setAttribute("aria-label", historySortButton.title);
+  historySortButton.setAttribute("aria-haspopup", "menu");
+  historySortButton.setAttribute("aria-expanded", "false");
+  const historySortButtonLabel = createHtmlElement(
+    doc,
+    "span",
+    "llm-standalone-history-sort-label",
+  );
+  historySortButton.append(historySortButtonLabel);
+  historyLabel.append(historyLabelText, historySortButton);
+  historyHeader.append(historyLabel);
+
+  const historySortMenu = createHtmlElement(
+    doc,
+    "div",
+    "llm-standalone-history-sort-menu",
+  );
+  historySortMenu.setAttribute("role", "menu");
+  historySortMenu.setAttribute("aria-label", translate("Sort conversations"));
+  historySortMenu.hidden = true;
+  const sortMenuTitle = createHtmlElement(
+    doc,
+    "div",
+    "llm-standalone-history-sort-menu-title",
+  );
+  sortMenuTitle.textContent = translate("Sort by");
+  historySortMenu.append(sortMenuTitle);
+  const createSortMenuItem = (role: string, text: string) => {
+    const item = createHtmlElement(
+      doc,
+      "button",
+      "llm-standalone-history-sort-item",
+    );
+    item.type = "button";
+    item.setAttribute("role", role);
+    item.setAttribute("aria-checked", "false");
+    item.textContent = text;
+    historySortMenu.append(item);
+    return item;
+  };
+  const historySortItems = new Map<
+    StandaloneSidebarSortOrder,
+    HTMLButtonElement
+  >();
+  for (const order of STANDALONE_SIDEBAR_SORT_ORDERS) {
+    const item = createSortMenuItem(
+      "menuitemradio",
+      translate(getStandaloneSidebarSortMenuLabel(order)),
+    );
+    item.dataset.sortOrder = order;
+    historySortItems.set(order, item);
+  }
+  historySortMenu.append(
+    createHtmlElement(doc, "div", "llm-standalone-history-sort-separator"),
+  );
+  const historyShowDatesItem = createSortMenuItem(
+    "menuitemcheckbox",
+    translate("Show dates"),
+  );
+  historyShowDatesItem.dataset.sortToggle = "dates";
   const undo = createHtmlElement(
     doc,
     "div",
@@ -215,7 +313,7 @@ export function createStandaloneSidebarView(
 
   const list = createHtmlElement(doc, "div", "llm-standalone-sidebar-list");
   list.id = "llm-standalone-sidebar-list";
-  historyRegion.append(undo, list);
+  historyRegion.append(historyHeader, undo, list);
 
   const preferencesRegion = createHtmlElement(
     doc,
@@ -248,6 +346,7 @@ export function createStandaloneSidebarView(
     pinnedRegion,
     historyRegion,
     preferencesRegion,
+    historySortMenu,
   );
 
   const resizeHandle = createHtmlElement(
@@ -280,6 +379,12 @@ export function createStandaloneSidebarView(
     pinnedList,
     pinnedClear,
     historyRegion,
+    historyHeader,
+    historySortButton,
+    historySortButtonLabel,
+    historySortMenu,
+    historySortItems,
+    historyShowDatesItem,
     undo,
     undoText,
     undoButton,

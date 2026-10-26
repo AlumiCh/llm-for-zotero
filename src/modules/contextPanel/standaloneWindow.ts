@@ -34,10 +34,14 @@ import {
   getLastUsedUpstreamGlobalConversationKey,
   getStandaloneSidebarWidthPref,
   getStandalonePinnedPapersPref,
+  getStandaloneSidebarShowDatesPref,
+  getStandaloneSidebarSortPref,
   getLockedGlobalConversationKey,
   setLockedGlobalConversationKey,
   setStandaloneSidebarWidthPref,
   setStandalonePinnedPapersPref,
+  setStandaloneSidebarShowDatesPref,
+  setStandaloneSidebarSortPref,
 } from "./prefHelpers";
 import {
   clearStandaloneSelection,
@@ -104,7 +108,6 @@ import {
 import {
   formatGlobalHistoryTimestamp,
   getHistoryRowRuntimeLabel,
-  groupHistoryEntriesByDay,
   isOrphanHistoryEntry,
   maybeSelectPaperHistoryTarget,
   normalizeConversationTitleSeed,
@@ -204,6 +207,13 @@ import {
   setStandaloneSidebarState,
 } from "./standaloneSidebarView";
 import { installStandaloneSidebarFlyout } from "./standaloneSidebarFlyout";
+import {
+  formatStandaloneSidebarShortDate,
+  getStandaloneSidebarEntryTime,
+  getStandaloneSidebarSortButtonLabel,
+  sortStandaloneSidebarEntries,
+  type StandaloneSidebarSortOrder,
+} from "./standaloneSidebarSort";
 import { releaseInlineEdit } from "./inlineEditState";
 import { pluginStylesheetHref } from "../../utils/pluginReload";
 import { createPluginUpdateController } from "../pluginUpdate";
@@ -369,6 +379,7 @@ type SidebarConv = {
   conversationSystem?: ConversationSystem;
   libraryID?: number;
   lastActivityAt: number;
+  createdAt?: number;
   title?: string;
   userTurnCount?: number;
   sessionVersion?: number;
@@ -1345,6 +1356,7 @@ export function openStandaloneChat(options?: {
         kind: entry.kind,
         libraryID: entry.libraryID,
         lastActivityAt: entry.lastActivityAt || entry.createdAt || 0,
+        createdAt: entry.createdAt || undefined,
         title: entry.title,
         userTurnCount: entry.userTurnCount,
         sessionVersion: entry.sessionVersion,
@@ -1362,6 +1374,8 @@ export function openStandaloneChat(options?: {
         if (cancelled) return;
         isInWebChatMode = isWebChat;
         updateStandaloneSystemToggles();
+        // Web chats carry no dates, so there is nothing to sort by.
+        sidebarView.historySortButton.hidden = isWebChat;
 
         // Tab labels
         if (isWebChat) {
@@ -2107,7 +2121,105 @@ export function openStandaloneChat(options?: {
           singleSystem: Boolean(resolveActiveNoteSession(activeItem)),
         });
 
+      // "Conversations" heading: its sort button, the menu, and the list it
+      // last drew (so a new order redraws without a reload).
+      let sidebarSortOrder = getStandaloneSidebarSortPref();
+      let sidebarShowDates = getStandaloneSidebarShowDatesPref();
+      let lastSidebarConversations: SidebarConv[] | null = null;
+      const syncSidebarSortControls = () => {
+        sidebarView.historySortButtonLabel.textContent = t(
+          getStandaloneSidebarSortButtonLabel(sidebarSortOrder),
+        );
+        for (const [order, item] of sidebarView.historySortItems) {
+          item.setAttribute("aria-checked", String(order === sidebarSortOrder));
+        }
+        sidebarView.historyShowDatesItem.setAttribute(
+          "aria-checked",
+          String(sidebarShowDates),
+        );
+      };
+      const setSidebarSortMenuOpen = (open: boolean) => {
+        const menu = sidebarView.historySortMenu;
+        const button = sidebarView.historySortButton;
+        if (menu.hidden === !open) return;
+        menu.hidden = !open;
+        button.setAttribute("aria-expanded", String(open));
+        if (!open) return;
+        const panelRect = sidebarPanel.getBoundingClientRect();
+        const buttonRect = button.getBoundingClientRect();
+        menu.style.top = `${Math.round(buttonRect.bottom - panelRect.top + 4)}px`;
+        menu.style.right = `${Math.max(
+          4,
+          Math.round(panelRect.right - buttonRect.right),
+        )}px`;
+        sidebarView.historySortItems.get(sidebarSortOrder)?.focus();
+      };
+      const redrawSidebarAfterSortChange = () => {
+        syncSidebarSortControls();
+        if (isInWebChatMode) return;
+        if (lastSidebarConversations) {
+          renderSidebarItems(lastSidebarConversations);
+        } else {
+          scheduleStandaloneSidebarRender();
+        }
+      };
+      syncSidebarSortControls();
+      sidebarView.historySortButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setSidebarSortMenuOpen(sidebarView.historySortMenu.hidden);
+      });
+      sidebarView.historySortMenu.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const item = (event.target as Element | null)?.closest?.(
+          ".llm-standalone-history-sort-item",
+        ) as HTMLButtonElement | null;
+        if (!item) return;
+        if (item.dataset.sortOrder) {
+          sidebarSortOrder = item.dataset
+            .sortOrder as StandaloneSidebarSortOrder;
+          setStandaloneSidebarSortPref(sidebarSortOrder);
+          setSidebarSortMenuOpen(false);
+          sidebarView.historySortButton.focus();
+        } else if (item.dataset.sortToggle === "dates") {
+          sidebarShowDates = !sidebarShowDates;
+          setStandaloneSidebarShowDatesPref(sidebarShowDates);
+        }
+        redrawSidebarAfterSortChange();
+      });
+      sidebarView.historySortMenu.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          setSidebarSortMenuOpen(false);
+          sidebarView.historySortButton.focus();
+          return;
+        }
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+        event.preventDefault();
+        const items = Array.from(
+          sidebarView.historySortMenu.querySelectorAll(
+            ".llm-standalone-history-sort-item",
+          ),
+        ) as HTMLButtonElement[];
+        const index = items.indexOf(doc.activeElement as HTMLButtonElement);
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        items[(index + step + items.length) % items.length]?.focus();
+      });
+      doc.addEventListener("mousedown", (event) => {
+        const target = event.target as Node | null;
+        if (
+          target &&
+          (sidebarView.historySortMenu.contains(target) ||
+            sidebarView.historySortButton.contains(target))
+        ) {
+          return;
+        }
+        setSidebarSortMenuOpen(false);
+      });
+
       const renderSidebarItems = (conversations: SidebarConv[]) => {
+        setSidebarSortMenuOpen(false);
+        lastSidebarConversations = conversations;
         clearSidebarList();
         const visibleConversations =
           collapseDuplicateReusableConversationDrafts({
@@ -2134,80 +2246,89 @@ export function openStandaloneChat(options?: {
           return;
         }
 
-        const groups = groupHistoryEntriesByDay(visibleConversations, {
-          translate: t,
-        });
-        for (const group of groups) {
-          const dayLabel = doc.createElementNS(
+        const sortedConversations = sortStandaloneSidebarEntries(
+          visibleConversations,
+          sidebarSortOrder,
+        );
+        const now = Date.now();
+        for (const conv of sortedConversations) {
+          const btn = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
+          btn.className = "llm-standalone-conv-item";
+          if (conv.conversationKey === activeConversationKey) {
+            btn.classList.add("active");
+          }
+          btn.setAttribute("role", "button");
+          btn.tabIndex = 0;
+          btn.dataset.conversationKey = String(conv.conversationKey);
+          btn.dataset.conversationSystem =
+            conv.conversationSystem || currentConversationSystem;
+          if (conv.sessionVersion !== undefined) {
+            btn.dataset.sessionVersion = String(conv.sessionVersion);
+          }
+          const titleSpan = doc.createElementNS(
             HTML_NS,
-            "div",
-          ) as HTMLDivElement;
-          dayLabel.className = "llm-standalone-day-label";
-          dayLabel.textContent = group.label;
-          sidebarList.appendChild(dayLabel);
-
-          for (const conv of group.items) {
-            const btn = doc.createElementNS(HTML_NS, "div") as HTMLDivElement;
-            btn.className = "llm-standalone-conv-item";
-            if (conv.conversationKey === activeConversationKey) {
-              btn.classList.add("active");
-            }
-            btn.setAttribute("role", "button");
-            btn.tabIndex = 0;
-            btn.dataset.conversationKey = String(conv.conversationKey);
-            btn.dataset.conversationSystem =
-              conv.conversationSystem || currentConversationSystem;
-            if (conv.sessionVersion !== undefined) {
-              btn.dataset.sessionVersion = String(conv.sessionVersion);
-            }
-            const titleSpan = doc.createElementNS(
+            "span",
+          ) as HTMLSpanElement;
+          titleSpan.className = "llm-standalone-conv-title";
+          titleSpan.textContent = conv.title || t("Untitled chat");
+          const renameBtn = doc.createElementNS(
+            HTML_NS,
+            "button",
+          ) as HTMLButtonElement;
+          renameBtn.className = "llm-standalone-conv-rename";
+          renameBtn.type = "button";
+          renameBtn.setAttribute("aria-label", t("Rename chat"));
+          renameBtn.title = t("Rename chat");
+          renameBtn.dataset.action = "rename";
+          const deleteBtn = doc.createElementNS(
+            HTML_NS,
+            "button",
+          ) as HTMLButtonElement;
+          deleteBtn.className = "llm-standalone-conv-delete";
+          deleteBtn.type = "button";
+          deleteBtn.setAttribute("aria-label", t("Delete conversation"));
+          deleteBtn.title = t("Delete conversation");
+          deleteBtn.dataset.action = "delete";
+          btn.append(
+            createHistoryActivityIndicator(
+              doc,
+              conv.conversationKey,
+              t("Working"),
+            ),
+            titleSpan,
+          );
+          const runtimeLabel = getHistoryRowRuntimeLabel(
+            conv.conversationSystem || currentConversationSystem,
+          );
+          if (runtimeLabel) {
+            const labelSpan = doc.createElementNS(
               HTML_NS,
               "span",
             ) as HTMLSpanElement;
-            titleSpan.className = "llm-standalone-conv-title";
-            titleSpan.textContent = conv.title || t("Untitled chat");
-            const renameBtn = doc.createElementNS(
-              HTML_NS,
-              "button",
-            ) as HTMLButtonElement;
-            renameBtn.className = "llm-standalone-conv-rename";
-            renameBtn.type = "button";
-            renameBtn.setAttribute("aria-label", t("Rename chat"));
-            renameBtn.title = t("Rename chat");
-            renameBtn.dataset.action = "rename";
-            const deleteBtn = doc.createElementNS(
-              HTML_NS,
-              "button",
-            ) as HTMLButtonElement;
-            deleteBtn.className = "llm-standalone-conv-delete";
-            deleteBtn.type = "button";
-            deleteBtn.setAttribute("aria-label", t("Delete conversation"));
-            deleteBtn.title = t("Delete conversation");
-            deleteBtn.dataset.action = "delete";
-            btn.append(
-              createHistoryActivityIndicator(
-                doc,
-                conv.conversationKey,
-                t("Working"),
-              ),
-              titleSpan,
-            );
-            const runtimeLabel = getHistoryRowRuntimeLabel(
-              conv.conversationSystem || currentConversationSystem,
-            );
-            if (runtimeLabel) {
-              const labelSpan = doc.createElementNS(
+            labelSpan.className = "llm-history-runtime-label";
+            labelSpan.textContent = runtimeLabel;
+            btn.appendChild(labelSpan);
+          }
+          if (sidebarShowDates) {
+            const time = getStandaloneSidebarEntryTime(conv, sidebarSortOrder);
+            const dateText = formatStandaloneSidebarShortDate(time, {
+              now,
+              translate: t,
+            });
+            if (dateText) {
+              const dateSpan = doc.createElementNS(
                 HTML_NS,
                 "span",
               ) as HTMLSpanElement;
-              labelSpan.className = "llm-history-runtime-label";
-              labelSpan.textContent = runtimeLabel;
-              btn.appendChild(labelSpan);
+              dateSpan.className = "llm-standalone-conv-date";
+              dateSpan.textContent = dateText;
+              dateSpan.title = new Date(time).toLocaleString();
+              btn.appendChild(dateSpan);
             }
-            btn.append(renameBtn, deleteBtn);
-            btn.title = conv.title || t("Untitled chat");
-            sidebarList.appendChild(btn);
           }
+          btn.append(renameBtn, deleteBtn);
+          btn.title = conv.title || t("Untitled chat");
+          sidebarList.appendChild(btn);
         }
       };
 

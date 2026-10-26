@@ -54,6 +54,10 @@ import {
   serializePinnedPaperIDs,
 } from "./standalonePinnedPapers";
 import {
+  parseStandaloneSidebarSortOrder,
+  type StandaloneSidebarSortOrder,
+} from "./standaloneSidebarSort";
+import {
   forgetPaperRestoreTarget,
   getPaperRestoreTarget,
   rememberPaperRestoreTarget,
@@ -105,6 +109,8 @@ const LAST_GLOBAL_CONVERSATION_MAP_PREF_KEY = "lastUsedGlobalConversationMap";
 const PANEL_FONT_SCALE_PREF_KEY = "panelFontScale";
 const STANDALONE_SIDEBAR_WIDTH_PREF_KEY = "standaloneSidebarWidth";
 const STANDALONE_PINNED_PAPERS_PREF_KEY = "standalonePinnedPapers";
+const STANDALONE_SIDEBAR_SORT_PREF_KEY = "standaloneSidebarSort";
+const STANDALONE_SIDEBAR_SHOW_DATES_PREF_KEY = "standaloneSidebarShowDates";
 const SHORTCUT_DEFAULTS_MIGRATION_PREF_KEY = "shortcutDefaultsMigrationVersion";
 const SHORTCUT_DEFAULTS_MIGRATION_VERSION = 2;
 const MESSAGE_LINE_SPACING_PREF_KEY = "messageLineSpacing";
@@ -610,6 +616,39 @@ export function setStandalonePinnedPapersPref(ids: readonly number[]): void {
   getZoteroPrefs()?.set?.(
     `${config.prefsPrefix}.${STANDALONE_PINNED_PAPERS_PREF_KEY}`,
     serializePinnedPaperIDs(ids),
+    true,
+  );
+}
+
+/** The order of the window sidebar's "Conversations" list. */
+export function getStandaloneSidebarSortPref(): StandaloneSidebarSortOrder {
+  return parseStandaloneSidebarSortOrder(
+    getZoteroPrefs()?.get?.(
+      `${config.prefsPrefix}.${STANDALONE_SIDEBAR_SORT_PREF_KEY}`,
+      true,
+    ),
+  );
+}
+
+export function setStandaloneSidebarSortPref(
+  order: StandaloneSidebarSortOrder,
+): void {
+  getZoteroPrefs()?.set?.(
+    `${config.prefsPrefix}.${STANDALONE_SIDEBAR_SORT_PREF_KEY}`,
+    parseStandaloneSidebarSortOrder(order),
+    true,
+  );
+}
+
+/** Whether each "Conversations" row shows a short date at its end. */
+export function getStandaloneSidebarShowDatesPref(): boolean {
+  return getBoolPref(STANDALONE_SIDEBAR_SHOW_DATES_PREF_KEY, false);
+}
+
+export function setStandaloneSidebarShowDatesPref(value: boolean): void {
+  getZoteroPrefs()?.set?.(
+    `${config.prefsPrefix}.${STANDALONE_SIDEBAR_SHOW_DATES_PREF_KEY}`,
+    Boolean(value),
     true,
   );
 }

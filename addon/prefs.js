@@ -3,6 +3,8 @@ pref("logLevel", "warn");
 pref("sidebarLayout", "stacked");
 pref("standaloneSidebarWidth", 220);
 pref("standalonePinnedPapers", "");
+pref("standaloneSidebarSort", "recent");
+pref("standaloneSidebarShowDates", false);
 pref("input", "This is input");
 pref("apiBase", "");
 pref("apiKey", "");
