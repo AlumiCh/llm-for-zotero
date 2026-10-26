@@ -221,6 +221,11 @@ const shapes: Shape[] = [
 ];
 
 describe("applyModelInputTokenCap incremental estimate", function () {
+  // The reference algorithm re-estimates every message on each trim, which
+  // takes about a second on the large shapes and longer when the parallel
+  // run shares the CPU.
+  this.timeout(10_000);
+
   for (const shape of shapes) {
     it(`matches the full re-estimate algorithm: ${shape.name}`, function () {
       const expected = legacyApplyModelInputTokenCap(

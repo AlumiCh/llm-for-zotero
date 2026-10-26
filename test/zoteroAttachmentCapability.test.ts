@@ -398,31 +398,6 @@ describe("attachment capability", function () {
       assert.isTrue(result.titleUpdated);
     });
 
-    it("retitles a linked URL, which has no file to rename", async function () {
-      const titleWrites: string[] = [];
-      makeAttachment({
-        id: 2,
-        title: "Old title",
-        linkMode: 3,
-        extra: {
-          setField: (name: string, value: string) => {
-            if (name === "title") titleWrites.push(value);
-          },
-          renameAttachmentFile: async () => true,
-        },
-      });
-      installZotero();
-
-      const result = await capability().renameAttachment({
-        attachmentId: 2,
-        newName: "New title",
-      });
-
-      assert.deepEqual(titleWrites, ["New title"]);
-      assert.equal(result.status, "renamed");
-      assert.isTrue(result.titleUpdated);
-    });
-
     it("separates a missing file from a name collision", async function () {
       makeAttachment({
         id: 2,

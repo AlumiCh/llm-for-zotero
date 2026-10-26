@@ -263,8 +263,8 @@ describe("workflow: task progress show in answer from the side panel tab", funct
   });
 
   /**
-   * Click each kind of row's "Show in answer" in `container`, once with
-   * element.click() and once with a real mouse click, and log the way.
+   * Click each kind of row's "Show in answer" in `container` with a real
+   * mouse click, and log the way.
    */
   async function clickEach(
     win: any,
@@ -353,150 +353,144 @@ describe("workflow: task progress show in answer from the side panel tab", funct
         ?.textContent || "";
     const results: Array<Record<string, unknown>> = [];
     for (const kind of ["paper", "web", "library", "cited"]) {
-      for (const how of ["element.click", "mouse"]) {
-        const rows = rowsOf(kind);
-        if (!rows.length) {
-          results.push({ label, kind, how, missing: true });
-          continue;
-        }
-        const keyOf = (node: HTMLElement) =>
-          node.dataset.key || node.dataset.card;
-        const key = keyOf(rows[0])!;
-        const byKey = () => rowsOf(kind).find((node) => keyOf(node) === key)!;
-        const summary = () =>
-          byKey().querySelector(
-            kind === "cited"
-              ? ".llm-task-card-head"
-              : ".llm-task-paper-summary",
-          ) as HTMLElement;
-        if (summary().getAttribute("aria-expanded") !== "true")
-          summary().click();
-        const link = () =>
-          byKey()?.querySelector(
-            ".llm-task-source-link:not(.llm-task-source-open)",
-          ) as HTMLElement | null;
-        await until(() => {
-          api.flushTaskProgress();
-          return Boolean(link());
-        }, `${label}: the ${kind} row shows Show in answer`);
-        if (kind === "paper" || kind === "web") {
-          assert.isOk(
-            link()!.closest(".llm-task-source-quote"),
-            `${label}: the ${kind} row lists the sentence under In the answer`,
-          );
-          assert.isNull(
-            byKey().querySelector(".llm-task-cited-item"),
-            `${label}: the ${kind} row lists nothing under Cited`,
-          );
-        } else {
-          assert.isOk(
-            link()!.closest(".llm-task-cited-named"),
-            `${label}: the ${kind} paper lists the sentence that names it under Cited`,
-          );
-          assert.isNull(
-            byKey().querySelector(".llm-task-source-quote"),
-            `${label}: the ${kind} paper lists nothing under In the answer`,
-          );
-        }
-        answer()?.dispatchEvent(
-          new win.MouseEvent("mousedown", { bubbles: true }),
-        );
-        await Zotero.Promise.delay(150);
-        // As after an answer: the chat at its end, following it.
-        const box = chat().querySelector("#llm-chat-box") as HTMLElement;
-        box.scrollTop = box.scrollHeight;
-        await Zotero.Promise.delay(300);
-        trace.length = 0;
-        const before = link()!;
-        let where = "";
-        if (how === "mouse") where = await realClick(before);
-        else before.click();
-        // Something in the chat changes as the scroll starts (a message
-        // still drawing, a chip that settles): the chat redoes its layout
-        // while the scroll has not moved yet.
-        win.requestAnimationFrame(() =>
-          answer()?.classList.toggle("llm-workflow-test-nudge"),
-        );
-        const deadline = Date.now() + 3000;
-        while (!lit().length && Date.now() < deadline)
-          await Zotero.Promise.delay(40);
-        // The scroll settles, and nothing pulls it back down.
-        await Zotero.Promise.delay(1500);
-        // What a reader sees of the chat starts below what covers its top:
-        // the standalone window's title row runs over it.
-        const visibleTop = () => {
-          const title = box
-            .closest(".llm-standalone-content-wrapper")
-            ?.querySelector(":scope > .llm-standalone-content-title");
-          return Math.max(
-            box.getBoundingClientRect().top,
-            title?.getBoundingClientRect().bottom ?? -Infinity,
-          );
-        };
-        const firstLine = () => {
-          const rect = lit()[0]?.getClientRects()[0];
-          return rect ? Math.round(rect.top - visibleTop()) : null;
-        };
-        const offset = firstLine();
-        // Something in the chat changes after the jump (a chip settles):
-        // the chat redoes its layout and saves where the reader is.
-        answer()?.classList.toggle("llm-workflow-test-nudge");
-        await Zotero.Promise.delay(300);
-        // Then the block just above the sentence changes height (a card or
-        // a figure settling smaller): the sentence stays where it is.
-        const start = lit()[0];
-        const above = (
-          Array.from(
-            answer()?.querySelectorAll("h1, h2, h3, h4, p, li, pre, table") ||
-              [],
-          ) as HTMLElement[]
-        )
-          .filter(
-            (node) =>
-              start &&
-              !node.contains(start) &&
-              Boolean(node.compareDocumentPosition(start) & 4),
-          )
-          .pop();
-        if (above) {
-          above.style.fontSize = "4px";
-          above.style.lineHeight = "4px";
-        }
-        await Zotero.Promise.delay(600);
-        const offsetAfterShrink = firstLine();
-        if (above) {
-          above.style.fontSize = "";
-          above.style.lineHeight = "";
-        }
-        answer()?.classList.toggle("llm-workflow-test-nudge");
-        await Zotero.Promise.delay(300);
-        const shown = (value: number | null) =>
-          value !== null && value >= 6 && value < box.clientHeight / 2;
-        const answers = Array.from(
-          chat().querySelectorAll(".llm-assistant-answer"),
-        ).map((node) => (node as HTMLElement).dataset.agentRunId || "-");
-        results.push({
-          label,
-          kind,
-          how,
-          where,
-          // The answer's own words, not the trace's copy of them.
-          inAnswer: Boolean(lit()[0]?.closest(".llm-assistant-answer")),
-          linkReplaced: !before.isConnected,
-          trace: trace.slice(),
-          answers,
-          lit: lit().length,
-          offset,
-          offsetAfterShrink,
-          shrank: Boolean(above),
-          inView: shown(offset) && shown(offsetAfterShrink),
-          words: lit()
-            .map((node) => node.textContent || "")
-            .join("")
-            .slice(0, 80),
-          status: status(),
-        });
+      // A real mouse click also runs the click handler, so one path is enough.
+      const how = "mouse";
+      const rows = rowsOf(kind);
+      if (!rows.length) {
+        results.push({ label, kind, how, missing: true });
+        continue;
       }
+      const keyOf = (node: HTMLElement) =>
+        node.dataset.key || node.dataset.card;
+      const key = keyOf(rows[0])!;
+      const byKey = () => rowsOf(kind).find((node) => keyOf(node) === key)!;
+      const summary = () =>
+        byKey().querySelector(
+          kind === "cited" ? ".llm-task-card-head" : ".llm-task-paper-summary",
+        ) as HTMLElement;
+      if (summary().getAttribute("aria-expanded") !== "true") summary().click();
+      const link = () =>
+        byKey()?.querySelector(
+          ".llm-task-source-link:not(.llm-task-source-open)",
+        ) as HTMLElement | null;
+      await until(() => {
+        api.flushTaskProgress();
+        return Boolean(link());
+      }, `${label}: the ${kind} row shows Show in answer`);
+      if (kind === "paper" || kind === "web") {
+        assert.isOk(
+          link()!.closest(".llm-task-source-quote"),
+          `${label}: the ${kind} row lists the sentence under In the answer`,
+        );
+        assert.isNull(
+          byKey().querySelector(".llm-task-cited-item"),
+          `${label}: the ${kind} row lists nothing under Cited`,
+        );
+      } else {
+        assert.isOk(
+          link()!.closest(".llm-task-cited-named"),
+          `${label}: the ${kind} paper lists the sentence that names it under Cited`,
+        );
+        assert.isNull(
+          byKey().querySelector(".llm-task-source-quote"),
+          `${label}: the ${kind} paper lists nothing under In the answer`,
+        );
+      }
+      answer()?.dispatchEvent(
+        new win.MouseEvent("mousedown", { bubbles: true }),
+      );
+      await Zotero.Promise.delay(150);
+      // As after an answer: the chat at its end, following it.
+      const box = chat().querySelector("#llm-chat-box") as HTMLElement;
+      box.scrollTop = box.scrollHeight;
+      await Zotero.Promise.delay(300);
+      trace.length = 0;
+      const before = link()!;
+      const where = await realClick(before);
+      // Something in the chat changes as the scroll starts (a message
+      // still drawing, a chip that settles): the chat redoes its layout
+      // while the scroll has not moved yet.
+      win.requestAnimationFrame(() =>
+        answer()?.classList.toggle("llm-workflow-test-nudge"),
+      );
+      const deadline = Date.now() + 3000;
+      while (!lit().length && Date.now() < deadline)
+        await Zotero.Promise.delay(40);
+      // The scroll settles, and nothing pulls it back down.
+      await Zotero.Promise.delay(1500);
+      // What a reader sees of the chat starts below what covers its top:
+      // the standalone window's title row runs over it.
+      const visibleTop = () => {
+        const title = box
+          .closest(".llm-standalone-content-wrapper")
+          ?.querySelector(":scope > .llm-standalone-content-title");
+        return Math.max(
+          box.getBoundingClientRect().top,
+          title?.getBoundingClientRect().bottom ?? -Infinity,
+        );
+      };
+      const firstLine = () => {
+        const rect = lit()[0]?.getClientRects()[0];
+        return rect ? Math.round(rect.top - visibleTop()) : null;
+      };
+      const offset = firstLine();
+      // Something in the chat changes after the jump (a chip settles):
+      // the chat redoes its layout and saves where the reader is.
+      answer()?.classList.toggle("llm-workflow-test-nudge");
+      await Zotero.Promise.delay(300);
+      // Then the block just above the sentence changes height (a card or
+      // a figure settling smaller): the sentence stays where it is.
+      const start = lit()[0];
+      const above = (
+        Array.from(
+          answer()?.querySelectorAll("h1, h2, h3, h4, p, li, pre, table") || [],
+        ) as HTMLElement[]
+      )
+        .filter(
+          (node) =>
+            start &&
+            !node.contains(start) &&
+            Boolean(node.compareDocumentPosition(start) & 4),
+        )
+        .pop();
+      if (above) {
+        above.style.fontSize = "4px";
+        above.style.lineHeight = "4px";
+      }
+      await Zotero.Promise.delay(600);
+      const offsetAfterShrink = firstLine();
+      if (above) {
+        above.style.fontSize = "";
+        above.style.lineHeight = "";
+      }
+      answer()?.classList.toggle("llm-workflow-test-nudge");
+      await Zotero.Promise.delay(300);
+      const shown = (value: number | null) =>
+        value !== null && value >= 6 && value < box.clientHeight / 2;
+      const answers = Array.from(
+        chat().querySelectorAll(".llm-assistant-answer"),
+      ).map((node) => (node as HTMLElement).dataset.agentRunId || "-");
+      results.push({
+        label,
+        kind,
+        how,
+        where,
+        // The answer's own words, not the trace's copy of them.
+        inAnswer: Boolean(lit()[0]?.closest(".llm-assistant-answer")),
+        linkReplaced: !before.isConnected,
+        trace: trace.slice(),
+        answers,
+        lit: lit().length,
+        offset,
+        offsetAfterShrink,
+        shrank: Boolean(above),
+        inView: shown(offset) && shown(offsetAfterShrink),
+        words: lit()
+          .map((node) => node.textContent || "")
+          .join("")
+          .slice(0, 80),
+        status: status(),
+      });
     }
     container().removeEventListener(EVENT, onTab);
     chat().removeEventListener(EVENT, onChat);

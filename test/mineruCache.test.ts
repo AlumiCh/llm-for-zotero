@@ -10,7 +10,6 @@ import {
   ensureManifest,
   finalizeMineruCacheFiles,
   validateMineruManifest,
-  getManifestFigureBaseLabel,
   getMineruItemDir,
   MINERU_SOURCE_PROVENANCE_KIND,
   MINERU_SOURCE_PROVENANCE_VERSION,
@@ -560,17 +559,6 @@ describe("mineruCache", function () {
   });
 
   describe("manifest figure grouping", function () {
-    it("normalizes same-number figure panels to a shared base label", function () {
-      assert.equal(getManifestFigureBaseLabel("Fig. 1a"), "Figure 1");
-      assert.equal(getManifestFigureBaseLabel("Figure 1B"), "Figure 1");
-      assert.equal(getManifestFigureBaseLabel("Figure 1"), "Figure 1");
-      assert.equal(getManifestFigureBaseLabel("Table 2c"), "Table 2");
-      assert.equal(
-        getManifestFigureBaseLabel("Supplementary Fig. S7b"),
-        "Supplementary Figure S7",
-      );
-    });
-
     it("stores base labels for compound figure entries in the manifest", function () {
       const md = [
         "# Abstract",

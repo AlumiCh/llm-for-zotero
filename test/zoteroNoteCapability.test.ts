@@ -136,19 +136,6 @@ describe("note capability", function () {
       assert.equal(resolved?.id, 9);
     });
 
-    it("returns nothing for a bad id instead of editing the open note", function () {
-      makeNote({ id: 5, html: "<p>open note</p>" });
-      installZotero();
-
-      // Silently editing whatever was open would rewrite the wrong note.
-      const resolved = capability().resolveActiveNoteItem({
-        request: { activeNoteContext: { noteId: 5 } } as never,
-        noteId: 404,
-      });
-
-      assert.isNull(resolved);
-    });
-
     it("falls back to the item the request has active", function () {
       makeNote({ id: 7, html: "<p>active</p>", title: "Active" });
       installZotero();

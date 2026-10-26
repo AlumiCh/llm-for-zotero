@@ -4,12 +4,14 @@ import { defineConfig } from "zotero-plugin-scaffold";
 import pkg from "./package.json";
 import { writeClaudeBridgeNotices } from "./scripts/claude-bridge-notices.mjs";
 import { patchGeneratedWorkflowTestReporter } from "./scripts/workflow-test-reporter.mjs";
+import { applyWorkflowTestSelection } from "./scripts/workflow-test-selection.mjs";
 
 const webChatLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_WEBCHAT_LIVE === "1";
 // Live agent tests call a real model with the user's own credentials, so they
 // are opt-in: they cost money and need network, which a default test run
 // should never assume.
 const agentLiveTestsEnabled = process.env.LLM_FOR_ZOTERO_AGENT_LIVE === "1";
+const testHttpPort = process.env.LLM_FOR_ZOTERO_TEST_HTTP_PORT;
 // The bridge bundles cc-llm4zotero-adapter, relicensed from MIT to AGPL with
 // permission; the relicense notice and the MIT text travel with every copy.
 const claudeBridgeNotice = readFileSync(
@@ -109,6 +111,17 @@ export default defineConfig({
     prefs: {
       "extensions.zotero.llmforzotero.claudeCodeLegacyDaemonCheck": false,
       "extensions.zotero.llmforzotero.claudeCodeLegacyDaemonNoticeShown": true,
+      // The scaffold gives every test Zotero the same HTTP port (23124), so
+      // two runs at once would clash. The workflow runner picks a free one.
+      ...(testHttpPort
+        ? { "extensions.zotero.httpServer.port": Number(testHttpPort) }
+        : {}),
+      // A window that is not in front gets one frame a second and slow
+      // timers. With several test Zoteros open at once, only one window can
+      // be in front, so run the others at full speed too.
+      "layout.throttled_frame_rate": 60,
+      "dom.min_background_timeout_value": 4,
+      "dom.timeout.enable_budget_timer_throttling": false,
     },
     entries:
       process.env.LLM_FOR_ZOTERO_TEST_ENTRIES ||
@@ -121,7 +134,9 @@ export default defineConfig({
             : "test"),
     ...(workflowTestsEnabled
       ? {
-          abortOnFail: !agentLiveTestsEnabled,
+          // Locally the first failure stops the run, for a fast answer. CI
+          // runs every test so one failure does not hide the rest.
+          abortOnFail: !agentLiveTestsEnabled && !process.env.CI,
           // A live agent turn does real model round trips and real library
           // writes, so it needs far longer than a UI workflow test.
           mocha: {
@@ -156,7 +171,10 @@ export default defineConfig({
           await cp(prefsSnapshot, ".scaffold/test/profile/prefs.js");
         }
       },
-      "test:bundleTests": () => patchGeneratedWorkflowTestReporter(),
+      "test:bundleTests": async () => {
+        await patchGeneratedWorkflowTestReporter();
+        await applyWorkflowTestSelection();
+      },
     },
     waitForPlugin: `() => Zotero.${pkg.config.addonInstance}.data.initialized`,
   },

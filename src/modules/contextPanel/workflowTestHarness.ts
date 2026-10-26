@@ -1217,7 +1217,10 @@ async function createItemNoteFixture(input: {
   note.libraryID = Zotero.Libraries.userLibraryID;
   note.parentID = fixture.parentItemId;
   note.setNote(input.noteHtml);
-  const savedNoteItemId = await note.saveTx();
+  // A selected note opens in Zotero's own note editor, which rewrites its
+  // HTML in its own format; whether Zotero selects a new item depends on
+  // what earlier tests left selected.
+  const savedNoteItemId = await note.saveTx({ skipSelect: true });
   const noteItemId = Math.floor(Number(savedNoteItemId));
   if (!Number.isFinite(noteItemId) || noteItemId <= 0) {
     throw new Error("Failed to save workflow test note");
@@ -4295,6 +4298,13 @@ async function startNewStandaloneConversation(): Promise<WorkflowTestStandaloneD
   assertWorkflowTestEnabled();
   const { contentArea } = await ensureStandaloneWorkflowPanelReady();
   const before = readStandaloneDiagnostics();
+  // New chat keeps a chat that has no messages yet, so an empty one is
+  // already the new conversation a caller asks for.
+  if (
+    before.conversationKey &&
+    !contentArea.querySelector("#llm-chat-box .llm-message-wrapper")
+  )
+    return before;
   dispatchWorkflowClick(contentArea, "#llm-history-new", "New chat button");
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {

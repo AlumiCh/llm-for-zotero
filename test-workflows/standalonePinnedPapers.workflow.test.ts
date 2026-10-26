@@ -6,7 +6,6 @@ import {
 import type {
   WorkflowTestApi,
   WorkflowTestFixture,
-  WorkflowTestStandalonePinnedPapers,
   WorkflowTestStandaloneSidePanelDiagnostics,
 } from "../src/modules/contextPanel/workflowTestTypes";
 import {
@@ -15,12 +14,9 @@ import {
 } from "./helpers/heldChatProvider";
 
 /**
- * The standalone window switches as a whole with the paper: the main chat,
- * the History pane and the side panel's tabs all belong to the paper shown.
- * Each paper keeps its side panel tabs while another is shown. A pinned
- * paper is listed under "Pinned papers" in the sidebar; clicking it shows
- * the paper again, in the window and in Zotero, as it was left. Its row
- * shows a dot while its chat answers and after, until the paper is seen.
+ * The standalone window's side panel belongs to the chat shown: Library chat
+ * has its own panel and no pin, and switching back to Paper chat brings the
+ * paper's side chat back on its own key.
  *
  * Everything runs in the real window; sends go through the real composers
  * and send flow, and only the network is scripted (a held fake provider).
@@ -91,37 +87,6 @@ describe("workflow: standalone pinned papers", function () {
     return state;
   }
 
-  async function waitForPins(
-    check: (state: WorkflowTestStandalonePinnedPapers) => boolean,
-    label: string,
-    timeoutMs = 10_000,
-  ): Promise<WorkflowTestStandalonePinnedPapers> {
-    let state = await api.listStandalonePinnedPapers();
-    await until(
-      async () => {
-        state = await api.listStandalonePinnedPapers();
-        return check(state);
-      },
-      () => `${label}: ${JSON.stringify(state)}`,
-      timeoutMs,
-    );
-    return state;
-  }
-
-  const savedPins = (): number[] =>
-    JSON.parse(
-      String(
-        Zotero.Prefs.get(PREF_PREFIX + "standalonePinnedPapers", true) || "[]",
-      ),
-    );
-
-  const selectedZoteroItemID = (): number => {
-    const pane = Zotero.getActiveZoteroPane?.();
-    const tabs = Zotero.getMainWindow?.()?.Zotero_Tabs;
-    if (tabs && tabs.selectedID !== "zotero-pane") return 0;
-    return Number(pane?.getSelectedItems?.()[0]?.id || 0);
-  };
-
   before(async function () {
     assert.include(Zotero.DataDirectory.dir, ".scaffold/test/data");
     api = getWorkflowTestApi();
@@ -179,169 +144,6 @@ describe("workflow: standalone pinned papers", function () {
     }
     Zotero.Prefs.set(PREF_PREFIX + "standalonePinnedPapers", "", true);
     await api.reset();
-  });
-
-  it("keeps each paper's side panel, and returns to a pinned paper as it was left", async function () {
-    const paperA = await api.createPaperWithPdfFixture({
-      title: "Pinned papers workflow paper A",
-      pdfTitle: "Pinned papers workflow paper A PDF",
-      pages: ["Pinned papers workflow paper A: one short page of text."],
-    });
-    fixtures.push(paperA);
-    const paperB = await api.createPaperWithPdfFixture({
-      title: "Pinned papers workflow paper B",
-      pdfTitle: "Pinned papers workflow paper B PDF",
-      pages: ["Pinned papers workflow paper B: one short page of text."],
-    });
-    fixtures.push(paperB);
-    const A = paperA.parentItemId;
-    const B = paperB.parentItemId;
-
-    await api.openStandaloneForItem(A);
-    let pins = await api.listStandalonePinnedPapers();
-    assert.isTrue(pins.pinButton.visible, "a paper chat offers the pin");
-    assert.isFalse(pins.pinButton.pressed);
-    assert.equal(pins.pinButton.label, "Pin this paper");
-    assert.isTrue(pins.regionVisible, "Pinned papers always shows");
-    assert.isFalse(pins.clearVisible, "nothing pinned: no Clear");
-
-    // Paper A: a side chat with one answer.
-    await api.clickStandaloneSidePanelControl("toggle");
-    let side = await api.clickStandaloneSidePanelControl("new-sidechat");
-    assert.equal(side.view, "sidechat");
-    const SIDE_Q = "pinned-papers-side-question";
-    const SIDE_A = "pinned-papers-side-answer";
-    await api.sendStandaloneSideChat(SIDE_Q);
-    {
-      const stream = await provider.waitForStream(SIDE_Q);
-      stream.push(SIDE_A);
-      stream.finish();
-    }
-    side = await waitForSide(
-      (state) =>
-        Boolean(
-          state.sideChat?.messageTexts.some((text) => text.includes(SIDE_A)),
-        ),
-      "paper A's side chat answers",
-      30_000,
-    );
-    const sideKeyA = side.sideChat!.conversationKey;
-    const sideTabA = side.activeTab;
-
-    // Pin paper A.
-    pins = await api.clickStandalonePinButton();
-    assert.isTrue(pins.pinButton.pressed);
-    assert.equal(pins.pinButton.label, "Unpin this paper");
-    assert.isTrue(pins.regionVisible);
-    assert.isTrue(pins.clearVisible);
-    assert.deepEqual(
-      pins.rows.map((row) => [row.paperItemId, row.active]),
-      [[A, true]],
-    );
-    assert.isNotEmpty(pins.rows[0].label);
-    assert.deepEqual(savedPins(), [A], "the pin is saved");
-
-    // Paper B: the whole window switches. B has no side panel of its own.
-    let main = await api.notifyStandaloneItemChanged(B);
-    assert.equal(main.basePaperItemId, B);
-    side = await waitForSide(
-      (state) => !state.open,
-      "paper B starts with its own, closed side panel",
-    );
-    pins = await api.listStandalonePinnedPapers();
-    assert.isFalse(pins.pinButton.pressed, "paper B is not pinned");
-    assert.deepEqual(
-      pins.rows.map((row) => [row.paperItemId, row.active]),
-      [[A, false]],
-    );
-    side = await api.clickStandaloneSidePanelControl("toggle");
-    assert.equal(side.view, "newtab");
-    assert.deepEqual(side.tabs, [], "B's panel holds none of A's tabs");
-
-    // Clicking the pinned row shows A again, as it was left: its side chat
-    // on the same key with its answer, and A selected in Zotero.
-    main = await api.clickStandalonePinnedPaper(A);
-    assert.equal(main.basePaperItemId, A);
-    side = await waitForSide(
-      (state) =>
-        state.open &&
-        state.activeTab === sideTabA &&
-        state.sideChat?.conversationKey === sideKeyA,
-      "paper A's side chat comes back",
-    );
-    assert.lengthOf(side.tabs, 1);
-    assert.isTrue(
-      side.sideChat!.messageTexts.some((text) => text.includes(SIDE_A)),
-      "the side chat keeps its answer",
-    );
-    assert.lengthOf(side.sideChat!.contextNotes, 0, "no context switch note");
-    await until(
-      () => selectedZoteroItemID() === A,
-      () => `Zotero selects paper A: ${selectedZoteroItemID()}`,
-    );
-
-    // Paper B's own panel (open, New tab) comes back with B too.
-    await api.notifyStandaloneItemChanged(B);
-    side = await waitForSide(
-      (state) => state.open && state.view === "newtab" && !state.tabs.length,
-      "paper B's own panel comes back",
-    );
-
-    // An answer that A's main chat writes while B is shown: a dot that
-    // pulses while it writes and stays until A is seen again.
-    await api.clickStandalonePinnedPaper(A);
-    const MAIN_Q = "pinned-papers-main-question";
-    await api.askStandalone(MAIN_Q);
-    const mainStream = await provider.waitForStream(MAIN_Q);
-    await api.notifyStandaloneItemChanged(B);
-    pins = await waitForPins(
-      (state) => state.rows[0]?.dot === "writing",
-      "A's row shows it is writing",
-    );
-    mainStream.push("pinned-papers-main-answer");
-    mainStream.finish();
-    pins = await waitForPins(
-      (state) => state.rows[0]?.dot === "ready",
-      "A's row shows the answer waits",
-      30_000,
-    );
-    await api.clickStandalonePinnedPaper(A);
-    pins = await waitForPins(
-      (state) => state.rows[0]?.dot === null && state.rows[0]?.active,
-      "seeing A clears its dot",
-    );
-    // The section lines up with the history list below it.
-    pins = await waitForPins(
-      (state) => state.edges.historyLabel !== null,
-      "A's chat is listed in the history",
-    );
-    assert.equal(pins.edges.pinnedLabel, pins.edges.historyLabel);
-    assert.equal(pins.edges.pinnedRow, pins.edges.historyRow);
-
-    // Unpin from the row: the list empties (its label stays) and the pref
-    // follows.
-    await api.clickStandalonePinnedPaper(A, "unpin");
-    pins = await waitForPins(
-      (state) => state.regionVisible && !state.rows.length,
-      "unpinned, the list is empty",
-    );
-    assert.isFalse(pins.clearVisible);
-    assert.isFalse(pins.pinButton.pressed);
-    assert.deepEqual(savedPins(), []);
-
-    // "Clear" unpins every paper in one click.
-    await api.clickStandalonePinButton();
-    await api.notifyStandaloneItemChanged(B);
-    pins = await api.clickStandalonePinButton();
-    assert.deepEqual(
-      pins.rows.map((row) => row.paperItemId),
-      [A, B],
-    );
-    pins = await api.clickStandalonePinnedClear();
-    assert.lengthOf(pins.rows, 0);
-    assert.isFalse(pins.clearVisible);
-    assert.isFalse(pins.pinButton.pressed);
-    assert.deepEqual(savedPins(), []);
   });
 
   it("gives Library chat its own side panel", async function () {

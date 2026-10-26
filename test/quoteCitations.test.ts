@@ -165,7 +165,7 @@ describe("quoteCitations", function () {
     );
   });
 
-  it("verifies fifty quote cards across a ten-paper source scope cooperatively", async function () {
+  it("verifies fifty quote cards across a ten-paper source scope cooperatively @speed", async function () {
     this.timeout(10_000);
     const sourceTexts = Array.from({ length: 10 }, (_paper, paperIndex) => {
       const quotes = Array.from(

@@ -22,7 +22,22 @@ describe("workflow: soft fade at the chat edges", function () {
     box.dispatchEvent(new owner.WheelEvent("wheel", { deltaY: -100 }));
     box.scrollTop = top;
     box.dispatchEvent(new owner.Event("scroll"));
-    await settle();
+    // The frame scheduler sets the fade; there is no transition to wait for.
+    // Wait for the expected top fade, then two more frames to paint it.
+    const frame = () =>
+      new Promise<void>((resolve) =>
+        owner.requestAnimationFrame(() => resolve()),
+      );
+    const expectedTop = () =>
+      `${Math.round(Math.min(Math.max(box.scrollTop, 0), 10))}px`;
+    const deadline = Date.now() + 400;
+    while (
+      box.style.getPropertyValue("--llm-edge-fade-top") !== expectedTop() &&
+      Date.now() < deadline
+    )
+      await frame();
+    await frame();
+    await frame();
   }
 
   function fadeHeights(box: HTMLDivElement) {

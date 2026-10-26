@@ -478,7 +478,9 @@ describe("workflow: unified history across Agent, Codex and Claude", function ()
         (row) => row.conversationKey === claude.conversationKey,
       );
       assert.isOk(claudeRow, message(rows));
-      assert.equal(claudeRow!.runtimeLabel, "Claude");
+      // The window's section label names the runtime; rows carry no tag.
+      assert.equal(claudeRow!.system, "claude_code", message(claudeRow));
+      assert.equal(claudeRow!.runtimeLabel, "", message(claudeRow));
 
       const opened = await api.clickStandaloneSidebarHistoryRow(
         claude.conversationKey,

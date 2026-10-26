@@ -85,7 +85,9 @@ describe("external MCP writes against native Zotero", function () {
       await io.remove(root, { recursive: true, ignoreAbsent: true });
     }
   });
-  for (const mode of ["safe", "auto", "yolo"] as const) {
+  // MCP calls take the external-runtime authorization and never read the
+  // permission mode; safe is the strictest, so it would fail first.
+  for (const mode of ["safe"] as const) {
     it(`executes a standalone create/import/tag/note/undo workflow in ${mode}`, async function () {
       const previousMode = getOriginalAgentPermissionMode();
       const items: number[] = [];

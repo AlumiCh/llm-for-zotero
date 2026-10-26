@@ -1,9 +1,16 @@
 import { assert } from "chai";
-import type { WorkflowTestApi } from "../src/modules/contextPanel/workflowTestTypes";
+import type { WorkflowTestApi } from "../../../src/modules/contextPanel/workflowTestTypes";
+
+declare const Zotero: any;
+declare const Services: any;
+
+const enabled =
+  Services.env.get("LLM_FOR_ZOTERO_STANDALONE_SWITCH_BENCH") === "1";
 
 /**
  * Times a conversation switch in the pop-out window with long, rich chats.
  * Measurements go to <data dir>/standalone-switch-timing.json.
+ * Opt-in: skipped unless LLM_FOR_ZOTERO_STANDALONE_SWITCH_BENCH=1.
  */
 describe("workflow: pop-out window chat switch timing", function () {
   this.timeout(300000);
@@ -14,12 +21,14 @@ describe("workflow: pop-out window chat switch timing", function () {
   const results: unknown[] = [];
 
   before(async function () {
+    if (!enabled) this.skip();
     assert.include(Zotero.DataDirectory.dir, ".scaffold/test/data");
     api = (Zotero as any).LLMForZotero.api.workflowTest;
     await api.reset();
   });
 
   after(async function () {
+    if (!enabled) return;
     await api.closeStandalone();
     await api.reset();
     for (const fixture of fixtures) await api.cleanupFixture(fixture);
