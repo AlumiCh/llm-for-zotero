@@ -4216,6 +4216,7 @@ function renderQuoteCitationPlaceholdersNow(params: {
     params.pairedUserMessage,
   );
   const targets: Text[] = [];
+  const shouldSkipInlineCitationNode = createInlineCitationSkipCheck();
   const walk = (node: Node): void => {
     if (node.nodeType === 3) {
       const textNode = node as Text;
@@ -4423,14 +4424,29 @@ function renderQuoteCitationPlaceholdersNow(params: {
   }
 }
 
-function shouldSkipInlineCitationNode(element: Element | null): boolean {
-  if (!element) return true;
-  if (element.closest(INLINE_CITATION_SKIP_SELECTOR)) {
-    return true;
-  }
-  const tag = element.tagName.toLowerCase();
-  if (tag === "script" || tag === "style") return true;
-  return false;
+/**
+ * A skip check for one walk over an unchanging tree: an element is skipped
+ * when it or an ancestor matches the skip selector (as `closest` would say),
+ * but each element is matched once instead of once per text node below it.
+ */
+function createInlineCitationSkipCheck(): (element: Element | null) => boolean {
+  const skippedByAncestry = new Map<Element, boolean>();
+  const isSkippedByAncestry = (element: Element): boolean => {
+    const known = skippedByAncestry.get(element);
+    if (known !== undefined) return known;
+    const parent = element.parentElement;
+    const skipped =
+      element.matches(INLINE_CITATION_SKIP_SELECTOR) ||
+      (parent ? isSkippedByAncestry(parent) : false);
+    skippedByAncestry.set(element, skipped);
+    return skipped;
+  };
+  return (element) => {
+    if (!element) return true;
+    if (isSkippedByAncestry(element)) return true;
+    const tag = element.tagName.toLowerCase();
+    return tag === "script" || tag === "style";
+  };
 }
 
 function decorateInlineCitationNodes(params: {
@@ -4441,6 +4457,7 @@ function decorateInlineCitationNodes(params: {
   candidates: AssistantCitationPaperCandidate[];
 }): void {
   const targets: Text[] = [];
+  const shouldSkipInlineCitationNode = createInlineCitationSkipCheck();
   const walk = (node: Node): void => {
     if (node.nodeType === 3) {
       const textNode = node as Text;

@@ -132,8 +132,21 @@ export function createSourcePopover(
     }, 120);
   };
 
+  // The card's content is built when it first opens: an answer can carry
+  // many marks, and most are never opened.
+  let populated = false;
+  const populate = () => {
+    if (populated) return;
+    populated = true;
+    options.populate(popover, () => {
+      pinned = false;
+      close();
+    });
+  };
+
   const open = () => {
     clearCloseTimer();
+    populate();
     if (!popover.isConnected) {
       (doc.body || doc.documentElement).appendChild(popover);
     }
@@ -185,11 +198,6 @@ export function createSourcePopover(
       connectionObserver?.disconnect();
     };
   };
-
-  options.populate(popover, () => {
-    pinned = false;
-    close();
-  });
 
   const handleFocusOut = () => {
     doc.defaultView?.setTimeout(() => {

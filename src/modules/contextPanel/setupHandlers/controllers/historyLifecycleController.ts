@@ -309,7 +309,9 @@ export type HistoryLifecycleControllerDeps = {
   getManualPaperContextsForItem: (itemId: number, auto: any) => any[];
   resolveAutoLoadedPaperContext: () => any;
   refreshAutoLoadedPaperContextForCurrentItem: () => void;
-  persistDraftInputForCurrentConversation: () => void;
+  persistDraftInputForCurrentConversation: (options?: {
+    resize?: boolean;
+  }) => void;
   restoreDraftInputForCurrentConversation: () => void;
   syncConversationIdentity: () => void;
   syncQueuedFollowUpRegistration: () => void;
@@ -2090,7 +2092,7 @@ export function createHistoryLifecycleController(
     if (!hostLease) return false;
     // A note can only navigate within its own item-scoped history.
     if (isNoteSession()) return false;
-    persistDraftInputForCurrentConversation();
+    persistDraftInputForCurrentConversation({ resize: false });
     const libraryID = getCurrentLibraryID();
     if (!libraryID) return false;
     const normalizedConversationKey = Number.isFinite(nextConversationKey)
@@ -2227,7 +2229,7 @@ export function createHistoryLifecycleController(
     }
     const hostLease = capturePanelOperationLease(body);
     if (!hostLease) return false;
-    persistDraftInputForCurrentConversation();
+    persistDraftInputForCurrentConversation({ resize: false });
     const libraryID = getCurrentLibraryID();
     if (!libraryID) return false;
     const paperItemID = Number(paperItem.id || 0);

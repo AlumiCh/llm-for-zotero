@@ -2929,10 +2929,14 @@ export function setupHandlers(
       cache.delete(normalizedKey);
     }
   };
-  const persistDraftInputForCurrentConversation = () => {
+  const persistDraftInputForCurrentConversation = (options?: {
+    resize?: boolean;
+  }) => {
     // Most programmatic composer updates already persist immediately. Keeping
     // sizing here makes those paths share the same behavior as typed input.
-    resizeTextareaToContent(inputBox);
+    // A conversation switch skips it: the next draft is restored and sized
+    // right after, and measuring here forces an extra layout of the window.
+    if (options?.resize !== false) resizeTextareaToContent(inputBox);
     // Don't persist the edit-mode text as a draft; the real draft was saved
     // with this panel's edit when edit mode was entered.
     if (!item || !inputBox || getInlineEditTarget(body)) return;
@@ -7167,7 +7171,7 @@ export function setupHandlers(
       }
       const lease = capturePanelOperationLease(body);
       if (!lease) return false;
-      persistDraftInputForCurrentConversation();
+      persistDraftInputForCurrentConversation({ resize: false });
       // The host is already bound to the next paper, so the mounted scope is
       // written before syncConversationIdentity runs its ownership check.
       item = nextItem;

@@ -1360,18 +1360,44 @@ function buildQuoteCitationWithPolicy(
  * written out and the stored citation format is unchanged.
  */
 export function normalizeQuoteCitations(value: unknown): QuoteCitation[] {
-  return normalizeQuoteCitationsWith(value, rebuildMintedQuoteCitation).map(
-    (citation) => {
-      if (!(citation as MintedQuoteCitation).allowShortQuoteText) {
-        return citation;
-      }
-      const { allowShortQuoteText: _marker, ...stored } =
-        citation as MintedQuoteCitation;
-      void _marker;
-      return stored;
-    },
-  );
+  if (!Array.isArray(value)) return [];
+  // One answer is drawn from the same stored array several times; reuse the
+  // result while the entries are unchanged. Callers get their own copies.
+  let signature: string | null = null;
+  try {
+    signature = JSON.stringify(value);
+  } catch {
+    signature = null;
+  }
+  const cached = signature ? normalizedQuoteCitationsCache.get(value) : null;
+  if (cached && cached.signature === signature) {
+    return cached.citations.map((citation) => ({ ...citation }));
+  }
+  const citations = normalizeQuoteCitationsWith(
+    value,
+    rebuildMintedQuoteCitation,
+  ).map((citation) => {
+    if (!(citation as MintedQuoteCitation).allowShortQuoteText) {
+      return citation;
+    }
+    const { allowShortQuoteText: _marker, ...stored } =
+      citation as MintedQuoteCitation;
+    void _marker;
+    return stored;
+  });
+  if (signature) {
+    normalizedQuoteCitationsCache.set(value, {
+      signature,
+      citations: citations.map((citation) => ({ ...citation })),
+    });
+  }
+  return citations;
 }
+
+const normalizedQuoteCitationsCache = new WeakMap<
+  unknown[],
+  { signature: string; citations: QuoteCitation[] }
+>();
 
 function normalizeQuoteCitationsWith(
   value: unknown,

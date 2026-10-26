@@ -5213,3 +5213,37 @@ describe("quote ids with '.' or ':'", function () {
     );
   });
 });
+
+describe("normalizeQuoteCitations reuse", function () {
+  const quoteText =
+    "Population codes rotate while the decoder stays aligned with behaviour across weeks.";
+  const make = (id: string) =>
+    buildQuoteCitation({ id, quoteText, citationLabel: "(Kim, 2026)" })!;
+
+  it("gives each caller its own copies of a reused result", function () {
+    const stored = [make("Q1"), make("Q2")];
+    const first = normalizeQuoteCitations(stored);
+    first[0].quoteText = "changed by a caller";
+    first.pop();
+    const second = normalizeQuoteCitations(stored);
+    assert.deepEqual(
+      second.map((citation) => [citation.id, citation.quoteText]),
+      [
+        ["Q1", quoteText],
+        ["Q2", quoteText],
+      ],
+    );
+  });
+
+  it("reads an entry again after it changes in place", function () {
+    const stored = [make("Q1")];
+    assert.isUndefined(normalizeQuoteCitations(stored)[0].pageHintIndex);
+    (stored[0] as { pageHintIndex?: number }).pageHintIndex = 3;
+    assert.equal(normalizeQuoteCitations(stored)[0].pageHintIndex, 3);
+    stored.push(make("Q2"));
+    assert.deepEqual(
+      normalizeQuoteCitations(stored).map((citation) => citation.id),
+      ["Q1", "Q2"],
+    );
+  });
+});
