@@ -340,7 +340,7 @@ export function buildLiteratureReadResult(
         : {}),
       ...(note ? { note } : {}),
     },
-    citation: `Cite this outside paper as ${sourceLabel}${link ? ` with its link ${link}` : ""}. It is not in the Zotero library, so it has no [[cite:]] or [[quote:]] anchors.`,
+    citation: `Cite this outside paper as ${sourceLabel}${link ? ` with its link ${link}, and give the link a title holding the exact words you used from it, copied word for word from what you read (about 5 to 25 words, no double quotes inside): [${sourceLabel}](${link} "exact words")` : ""}. It is not in the Zotero library, so it has no [[cite:]] or [[quote:]] anchors.`,
   };
   let remaining =
     maxTokens -

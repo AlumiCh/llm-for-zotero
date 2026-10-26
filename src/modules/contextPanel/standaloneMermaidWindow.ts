@@ -209,6 +209,7 @@ function buildViewerContent(
   targetWin: Window,
   root: HTMLElement,
   payload: StandaloneViewerPayload,
+  themeKey: MermaidThemeKey,
 ): { content: ViewerContent; label: string } | null {
   if (payload.kind === "svg") {
     const zoomTargetLabel = payload.zoomTargetLabel || "SVG preview";
@@ -246,6 +247,7 @@ function buildViewerContent(
       doc,
       payload.source,
       "llm-viewer-window-frame",
+      themeKey,
     );
     return { content: { buttons: [], body: frame }, label: "page" };
   }
@@ -299,7 +301,7 @@ function initializeStandaloneViewerWindow(
   ].join(" ");
   root.dataset.llmMermaidTheme = themeKey;
 
-  const built = buildViewerContent(doc, targetWin, root, payload);
+  const built = buildViewerContent(doc, targetWin, root, payload, themeKey);
   if (!built) return false;
   const { content, label } = built;
 

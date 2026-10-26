@@ -1,11 +1,7 @@
 import { assert } from "chai";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  buildWebSourceGroups,
-  collectRunWebSources,
-  findWebSourceEntry,
-} from "../src/modules/contextPanel/webSourcesData";
+import { collectRunWebSources } from "../src/modules/contextPanel/webSourcesData";
 import {
   openWebSourceLink,
   registerSidePanelWebHost,
@@ -15,12 +11,9 @@ import {
   type WebSourceLink,
 } from "../src/modules/contextPanel/webSourcesSidePanel";
 import {
-  CLOSED_SIDE_PANEL_TABS,
-  openSidePanel,
-  openWebSourcesSidePanelTab,
-  showSidePanelNewTabPage,
-} from "../src/modules/contextPanel/standaloneSidePanelState";
-import { splitAgentTextPassages } from "../src/modules/contextPanel/webSourcesTab";
+  describeAgentCoverage,
+  splitAgentTextPassages,
+} from "../src/modules/contextPanel/sourcePageView";
 import {
   buildWebSourceMarkerFace,
   WEB_SOURCE_MARKER_MAX_ICONS,
@@ -172,31 +165,6 @@ describe("web sources in the side panel", function () {
       );
     });
 
-    it("groups pages by the question before each answer", function () {
-      const groups = buildWebSourceGroups(
-        [
-          { role: "user", text: "First   question" },
-          { role: "assistant", text: "A", agentRunId: "run-1" },
-          { role: "user", text: "No web here" },
-          { role: "assistant", text: "B", agentRunId: "run-2" },
-          { role: "user", text: "Third" },
-          { role: "assistant", text: "C" },
-        ],
-        new Map([
-          ["run-1", runEvents],
-          ["run-2", []],
-        ]),
-      );
-      assert.lengthOf(groups, 1);
-      assert.equal(groups[0].question, "First question");
-      assert.equal(groups[0].questionNumber, 1);
-      assert.equal(
-        findWebSourceEntry(groups, "https://site2.example.org/page#top")?.title,
-        "Page 2",
-      );
-      assert.isNull(findWebSourceEntry(groups, "https://elsewhere.example/"));
-    });
-
     it("drops private and non-web addresses", function () {
       const sources = collectRunWebSources([
         event({
@@ -237,7 +205,7 @@ describe("web sources in the side panel", function () {
       const doc = {} as Document;
       const opened: WebSourceLink[] = [];
       const host: SidePanelWebHost = {
-        openSources: () => {},
+        showSources: () => {},
         openPage: (link) => opened.push(link),
       };
       registerSidePanelWebHost(doc, host);
@@ -283,31 +251,6 @@ describe("web sources in the side panel", function () {
       globalWithZotero.Zotero = { isMac: false };
       assert.isTrue(wantsDefaultBrowser({ metaKey: false, ctrlKey: true }));
       assert.isFalse(wantsDefaultBrowser({ metaKey: true, ctrlKey: false }));
-    });
-  });
-
-  describe("the tab", function () {
-    it("is one tab that every page reuses", function () {
-      const first = openWebSourcesSidePanelTab(
-        openSidePanel(CLOSED_SIDE_PANEL_TABS),
-        "web-1",
-      );
-      assert.isTrue(first.opened);
-      assert.isTrue(first.state.open);
-      assert.equal(first.state.activeId, "web-1");
-      // The New tab page it was opened from is replaced.
-      assert.isFalse(first.state.newTabOpen);
-      const again = openWebSourcesSidePanelTab(
-        showSidePanelNewTabPage(first.state),
-        "web-2",
-      );
-      assert.isFalse(again.opened);
-      assert.equal(again.tabId, "web-1");
-      assert.equal(again.state.activeId, "web-1");
-      assert.lengthOf(
-        again.state.tabs.filter((tab) => tab.kind === "web"),
-        1,
-      );
     });
   });
 
@@ -373,19 +316,19 @@ describe("web sources in the side panel", function () {
     });
   });
 
-  it("styles the flat Page | What the agent read tabs and the row actions", function () {
+  it("styles the flat Page | What the agent read tabs and the source page", function () {
     const css = readFileSync(
       join(process.cwd(), "addon/content/zoteroPane.css"),
       "utf8",
     );
     for (const selector of [
       ".llm-web-sources-mode.active",
-      ".llm-web-sources-row:hover .llm-web-sources-row-actions",
       ".llm-web-source-chip.llm-web-source-chip-sites",
       ".llm-web-source-more",
-      // The title row's Back, Copy and Open buttons really hide on the list.
+      // The title row's buttons really hide when they have nothing to do.
       ".llm-standalone-side-panel-web [hidden]",
-      '.llm-web-sources-question-head[aria-expanded="true"]',
+      ".llm-source-page-sub",
+      ".llm-source-page-read-label",
     ]) {
       assert.include(css, selector);
     }

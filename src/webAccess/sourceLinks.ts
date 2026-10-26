@@ -7,7 +7,7 @@ const REFERENCE_DEFINITION_PATTERN = /^\s{0,3}\[[^\]]+\]:\s/;
 // A markdown link (not an image), an <url> autolink, or a bare URL. A link
 // destination may hold one level of balanced parentheses.
 const WEB_LINK_PATTERN =
-  /(?<!!)\[([^[\]]*)\]\(\s*<?(https?:\/\/(?:[^\s<>()\u0000]|\([^\s<>()\u0000]*\))+)>?(?:\s+"[^"]*")?\s*\)|(?<!\]\(\s*)<(https?:\/\/[^\s<>\u0000]+)>|(?<!\]\(\s*<?)(https?:\/\/[^\s<>\u0000]+)/gi;
+  /(?<!!)\[([^[\]]*)\]\(\s*<?(https?:\/\/(?:[^\s<>()\u0000]|\([^\s<>()\u0000]*\))+)>?(?:\s+"([^"]*)")?\s*\)|(?<!\]\(\s*)<(https?:\/\/[^\s<>\u0000]+)>|(?<!\]\(\s*<?)(https?:\/\/[^\s<>\u0000]+)/gi;
 const LIST_PREFIX_PATTERN = /^\s*(?:[-*+]|\d+[.)])?\s*/;
 const TRAILING_PUNCTUATION = ".,;:!?";
 
@@ -86,6 +86,7 @@ function translateLine(
         found: string,
         linkText: string | undefined,
         linkUrl: string | undefined,
+        _linkTitle: string | undefined,
         autolinkUrl: string | undefined,
         bareUrl: string | undefined,
       ) => {
@@ -215,15 +216,22 @@ function tidyAroundTokens(line: string): string {
 export function inlineSourceLinks(
   text: string,
   idByKey: ReadonlyMap<string, string>,
-): { text: string; tokens: string[][] } {
+): {
+  text: string;
+  tokens: string[][];
+  /** Each token's exact phrases, by source id: the links' titles. */
+  phrases: Record<string, string>[];
+} {
   const tokens: string[][] = [];
-  if (!idByKey.size) return { text, tokens };
+  const phrases: Record<string, string>[] = [];
+  if (!idByKey.size) return { text, tokens, phrases };
   const idFor = (url: string) => {
     const key = looseWebUrlKey(url);
     return key ? idByKey.get(key) : undefined;
   };
-  const token = (id: string) => {
+  const token = (id: string, phrase = "") => {
     tokens.push([id]);
+    phrases.push(phrase ? { [id]: phrase } : {});
     return `${INLINE_SOURCE_TOKEN_START}${tokens.length - 1}${INLINE_SOURCE_TOKEN_END}`;
   };
   const translateLine = (rawLine: string) => {
@@ -242,6 +250,7 @@ export function inlineSourceLinks(
           found: string,
           linkText: string | undefined,
           linkUrl: string | undefined,
+          linkTitle: string | undefined,
           autolinkUrl: string | undefined,
           bareUrl: string | undefined,
         ) => {
@@ -249,9 +258,12 @@ export function inlineSourceLinks(
             const id = idFor(linkUrl);
             if (!id) return found;
             const words = (linkText || "").trim();
+            const phrase = (linkTitle || "").replace(/\s+/g, " ").trim();
             if (!isGenericLinkText(words, linkUrl))
-              return `${words}${token(id)}`;
-            return keepUrls ? `${found}${token(id)}` : token(id);
+              return `${words}${token(id, phrase)}`;
+            return keepUrls
+              ? `${found}${token(id, phrase)}`
+              : token(id, phrase);
           }
           if (autolinkUrl) {
             const id = idFor(autolinkUrl);
@@ -270,6 +282,7 @@ export function inlineSourceLinks(
     // Removing the URL must not leave an empty list item or line.
     if (!/[\p{L}\p{N}]/u.test(withoutTokens.replace(LIST_PREFIX_PATTERN, ""))) {
       tokens.length = firstToken;
+      phrases.length = firstToken;
       translated = translate(true);
     }
     const tidied = tidyAroundTokens(translated)
@@ -281,6 +294,12 @@ export function inlineSourceLinks(
             (match) => tokens[Number(match[1])],
           );
           tokens[Number(first)] = Array.from(new Set(ids));
+          phrases[Number(first)] = Object.assign(
+            {},
+            ...Array.from(found.matchAll(INLINE_TOKEN_PATTERN)).map(
+              (match) => phrases[Number(match[1])] || {},
+            ),
+          );
           return `${INLINE_SOURCE_TOKEN_START}${first}${INLINE_SOURCE_TOKEN_END}`;
         },
       );
@@ -307,7 +326,7 @@ export function inlineSourceLinks(
       ? lineWithBreak
       : translateLine(line) + (hasBreak ? "\n" : "");
   }
-  return { text: output, tokens };
+  return { text: output, tokens, phrases };
 }
 
 /**
@@ -317,19 +336,29 @@ export function inlineSourceLinks(
 export function extractInlineSourceTokens(
   text: string,
   tokens: readonly string[][],
+  /** Each token's exact phrases, by source id (the links' titles). */
+  phrases: readonly Record<string, string>[] = [],
 ): {
   text: string;
-  inline: { offset: number; ids: string[] }[];
+  inline: { offset: number; ids: string[]; phrases: Record<string, string> }[];
   /** Where an offset in the text with tokens lands without them. */
   mapOffset: (offset: number) => number;
 } {
-  const inline: { offset: number; ids: string[] }[] = [];
+  const inline: {
+    offset: number;
+    ids: string[];
+    phrases: Record<string, string>;
+  }[] = [];
   const removed: { at: number; length: number }[] = [];
   let output = "";
   let cursor = 0;
   for (const match of text.matchAll(INLINE_TOKEN_PATTERN)) {
     output += text.slice(cursor, match.index);
-    inline.push({ offset: output.length, ids: tokens[Number(match[1])] || [] });
+    inline.push({
+      offset: output.length,
+      ids: tokens[Number(match[1])] || [],
+      phrases: phrases[Number(match[1])] || {},
+    });
     removed.push({ at: match.index!, length: match[0].length });
     cursor = match.index! + match[0].length;
   }

@@ -331,6 +331,9 @@ describe("task progress history rebuild", function () {
         "plan_execution_updated",
         "execution_checkpoint",
         "execution_checkpoint_delta",
+        // The outside groups: searches and reads, and the answer's markers.
+        "tool_call",
+        "final",
       ],
     );
   });
@@ -370,11 +373,74 @@ describe("task progress history rebuild", function () {
         live: false,
         deltas: [],
         quoteCitations: [quoteCitation("q1", 2)],
+        // Its answer cites none of them with a token.
+        answerCitations: [],
         checklist: null,
+        // The answer alone, so papers it names can be found.
+        outside: {
+          runId: "run-1",
+          sources: [],
+          earlier: [],
+          searched: [],
+          librarySearched: false,
+          why: {},
+          answer: "Two do.",
+        },
       },
     ]);
     assert.isFalse(history.planSeen);
     assert.isNull(history.checklist);
+  });
+
+  it("reads a web-attributed answer's passages from its own text, as the chat renders it", function () {
+    const quoteCitations = [quoteCitation("Q_a", 2), quoteCitation("Q_b", 2)];
+    const messages: Message[] = [
+      { role: "user", text: "Which papers measure drift?", timestamp: 1 },
+      {
+        role: "assistant",
+        text: "Old [[cite:Q_a]].",
+        timestamp: 2,
+        agentRunId: "run-1",
+        quoteCitations,
+        quoteDisplayOverride: {
+          markdown: "New [[cite:Q_b]]. Old [[cite:Q_a]].",
+          quoteCitations,
+        },
+      },
+    ];
+    const final = (anchors: boolean) =>
+      record("run-1", 1, {
+        type: "final",
+        text: "Old [[cite:Q_a]].",
+        ...(anchors
+          ? {
+              webSourceAnchors: [
+                {
+                  offset: 17,
+                  sources: [
+                    {
+                      sourceId: "web_1",
+                      url: "https://example.org/a",
+                      hostname: "example.org",
+                      title: "A page",
+                    },
+                  ],
+                },
+              ],
+            }
+          : {}),
+      } as AgentRunEventRecord["payload"]);
+    const cited = (anchors: boolean) =>
+      buildTaskProgressHistory(
+        messages,
+        new Map([["run-1", [final(anchors)]]]),
+        1,
+      ).runs[0].answerCitations?.map((entry) => [entry.id, entry.number]);
+    assert.deepEqual(cited(false), [
+      ["Q_b", 1],
+      ["Q_a", 2],
+    ]);
+    assert.deepEqual(cited(true), [["Q_a", 1]]);
   });
 
   it("waits for the conversation's history to load", async function () {

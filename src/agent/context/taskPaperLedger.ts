@@ -245,7 +245,13 @@ export type TaskPaperLedger = {
 };
 
 export const TASK_PAPER_MAX_READS_PER_TURN = 12;
-export const TASK_PAPER_MAX_CITATIONS_PER_TURN = 8;
+/**
+ * Passages of one paper a question's answer cites: high enough for an
+ * answer that cites each sentence.
+ */
+export const TASK_PAPER_MAX_CITATIONS_PER_TURN = 40;
+/** Sources of one paper a question's submitted documents cite. */
+export const TASK_PAPER_MAX_DOCUMENT_CITATIONS_PER_TURN = 8;
 /** Document sections one document citation lists. */
 export const TASK_PAPER_MAX_DOCUMENT_SECTIONS = 8;
 export const TASK_PAPER_MAX_PAPERS = 5000;
@@ -1870,7 +1876,7 @@ export function applyDocumentCitations(
     const turn = turnOf(entry, turnIndex);
     turn.state = "cited";
     const documentCitations = turn.citations.filter(isDocumentCitation).length;
-    if (documentCitations >= TASK_PAPER_MAX_CITATIONS_PER_TURN) {
+    if (documentCitations >= TASK_PAPER_MAX_DOCUMENT_CITATIONS_PER_TURN) {
       turn.droppedDocumentCitations = (turn.droppedDocumentCitations || 0) + 1;
       continue;
     }

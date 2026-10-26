@@ -15,8 +15,7 @@ export type SidePanelTabKind =
   | "history"
   | "item"
   | "misc"
-  | "progress"
-  | "web";
+  | "progress";
 
 export type SidePanelTab = {
   id: string;
@@ -275,31 +274,6 @@ export function openTaskProgressSidePanelTab(
     };
   }
   return addTab(state, { id, kind: "progress", conversationKey: 0 });
-}
-
-/**
- * The Web sources tab: from a web marker or link in the chat, or the New tab
- * page's "Web sources" row (the New tab tab becomes it). There is one; every
- * page opens in it, so links never fill the panel with tabs.
- */
-export function openWebSourcesSidePanelTab(
-  state: SidePanelTabsState,
-  id: string,
-): SidePanelTabOpenResult {
-  const existing = state.tabs.find((tab) => tab.kind === "web");
-  if (existing) {
-    const replacesNewTab = state.open && state.activeId === null;
-    return {
-      state: focusSidePanelTab(
-        replacesNewTab ? { ...state, newTabOpen: false } : state,
-        existing.id,
-      ),
-      tabId: existing.id,
-      opened: false,
-      refused: false,
-    };
-  }
-  return addTab(state, { id, kind: "web", conversationKey: 0 });
 }
 
 /** Whether the panel shows a Task progress tab (the chat's row then hides). */

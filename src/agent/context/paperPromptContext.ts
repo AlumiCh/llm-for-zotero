@@ -174,7 +174,7 @@ export async function preparePaperPromptContext(
       ? "Complete extracted paper text follows, in source order."
       : `Partial text: ${included}/${context.chunks.length} chunks fit the context budget. The remaining text is NOT included. For a whole-paper explanation, choose further section reads or full reading to cover the missing material.`;
     result.blocks.push(
-      `${header}${coverage}\nUse the supplied Q_ passage IDs for [[cite:ID]] paragraph citations or [[quote:ID]] reading recommendations. To use a passage marked [no passage ID], quote it as a \`>\` blockquote with the source label on the next line and no cite token; never construct an ID.\n\n${passages.join("\n\n")}`,
+      `${header}${coverage}\nUse the supplied Q_ passage IDs for [[cite:ID]] sentence citations or [[quote:ID]] reading recommendations. To use a passage marked [no passage ID], quote it as a \`>\` blockquote with the source label on the next line and no cite token; never construct an ID.\n\n${passages.join("\n\n")}`,
     );
     result.quoteCitations.push(...citations);
     remaining = Math.max(0, remaining - used);

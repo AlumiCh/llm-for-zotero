@@ -5,6 +5,10 @@ import { getPanelRequestUI, type PanelRequestUI } from "./panelRequestUI";
 export type { PanelRequestUI } from "./panelRequestUI";
 import { createCoalescedFrameScheduler } from "./setupHandlers/controllers/uiSchedulingController";
 import { syncTaskProgressPanel } from "./taskProgress/panel";
+import {
+  syncTaskAnswerCitations,
+  taskTurnIndexFor,
+} from "./taskProgress/store";
 import { createProviderRequestScope } from "../../utils/providerTransport";
 import { renderMarkdownForNote } from "../../utils/markdown";
 import { HTML_NS } from "../../utils/domHelpers";
@@ -3468,10 +3472,13 @@ export function buildPlainMarkdownClipboardText(
   markdownText: string,
   quoteCitations?: QuoteCitation[],
 ): string | null {
-  const safeText = buildQuoteExpandedMarkdown({
-    markdown: stripReceiptStatusForDisplay(sanitizeText(markdownText)).trim(),
-    quoteCitations,
-  });
+  const safeText = buildQuoteExpandedMarkdown(
+    {
+      markdown: stripReceiptStatusForDisplay(sanitizeText(markdownText)).trim(),
+      quoteCitations,
+    },
+    { paragraphCitations: "line-labels" },
+  );
   return safeText || null;
 }
 
@@ -6727,6 +6734,18 @@ export async function retryLatestAssistantResponse(
     assistantTurn.rollback();
     restoreAssistantSnapshot(assistantMessage, assistantSnapshot);
     restoreRetryUserSnapshot(retryPair.userMessage, userSnapshot);
+    // The retry started its question afresh: it lists the passages of the
+    // answer brought back.
+    syncTaskAnswerCitations(
+      conversationKey,
+      {
+        turn: taskTurnIndexFor(
+          chatHistory.get(conversationKey) || [],
+          retryPair.userMessage,
+        ),
+      },
+      assistantMessage,
+    );
     refreshChatSafely();
   };
   // Every retry write targets the retried pair's own user row by its stored
@@ -10715,6 +10734,9 @@ function updateMountedAssistantViews(
             : null,
         );
       }
+      // Task progress's "Show in answer" finds the run's answer by it.
+      const answerRunId = message.agentRunId?.trim();
+      if (answerRunId) view.answer.dataset.agentRunId = answerRunId;
       renderAssistantRichText({
         body,
         panelItem: item,
@@ -12187,6 +12209,8 @@ function renderChatForPanel(
         );
         answerHost = doc.createElement("div");
         answerHost.className = `llm-assistant-answer ${CONTENT_FLAT_SCOPE_CLASS}`;
+        // Task progress's "Show in answer" finds the run's answer by it.
+        if (agentRunId) answerHost.dataset.agentRunId = agentRunId;
         bubble.appendChild(answerHost);
         if (msg.streaming) bubble.classList.add("streaming");
         if (msg.compactMarker) {

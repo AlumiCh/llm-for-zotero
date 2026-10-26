@@ -82,6 +82,11 @@ export type WebSourceAnchor = {
    * "inline": a link the answer gave, shown as a small marker where it was.
    */
   placement?: "end" | "inline";
+  /**
+   * The exact words the answer took from a source, by source id, as the
+   * agent gave them; "What the agent read" highlights them where they match.
+   */
+  phrases?: Record<string, string>;
 };
 
 export type WebAccessUsage = {

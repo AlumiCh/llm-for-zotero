@@ -172,6 +172,20 @@ function display(fields: PaperFields, id: string): WebSourceDisplay | null {
 }
 
 /**
+ * One paper as a source: a literature_search result or literature_read's
+ * paper (with its full-text links in `extraUrls`); null without an identity
+ * or a link.
+ */
+export function describePaperSource(
+  raw: Record<string, unknown>,
+  extraUrls: unknown[] = [],
+): WebSourceDisplay | null {
+  const fields = paperFields(raw, extraUrls);
+  const identity = identityOf(fields);
+  return identity ? display(fields, paperSourceId(identity)) : null;
+}
+
+/**
  * The run's scholarly papers, and every link that names one of them (by
  * looseWebUrlKey). literature_search results and literature_read papers.
  */

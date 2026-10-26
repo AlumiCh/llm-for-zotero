@@ -131,9 +131,12 @@ describe("task progress run fold", function () {
   });
 
   it("is where the rebuild's stored event kinds come from", function () {
-    assert.strictEqual(
-      TASK_PROGRESS_HISTORY_EVENT_TYPES,
-      TASK_PROGRESS_REPLAY_EVENT_TYPES,
-    );
+    // The replayed kinds, and the tool calls and answers the outside
+    // groups fold (their tool results are read after, run by run).
+    assert.deepEqual(TASK_PROGRESS_HISTORY_EVENT_TYPES, [
+      ...TASK_PROGRESS_REPLAY_EVENT_TYPES,
+      "tool_call",
+      "final",
+    ]);
   });
 });

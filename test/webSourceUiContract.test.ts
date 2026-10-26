@@ -86,7 +86,7 @@ describe("web source UI contract", function () {
         join(root, "src/modules/contextPanel/webSourceIndicators.ts"),
         "utf8",
       );
-      for (const label of ['t("View web sources")', 't("Open web source")']) {
+      for (const label of ['t("View sources")', 't("Open web source")']) {
         assert.include(sourceIndicators, label);
       }
     } finally {
@@ -143,11 +143,13 @@ describe("web source UI contract", function () {
         title: "Page title",
         url: "https://example.com/page",
         faviconUrl: "https://example.com/favicon.ico",
+        sourceId: "web_abc1234",
       },
     ]);
     assert.deepEqual(Object.keys(rows[0]).sort(), [
       "faviconUrl",
       "organization",
+      "sourceId",
       "title",
       "url",
     ]);

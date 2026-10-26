@@ -2408,7 +2408,7 @@ describe("Codex app-server native client", function () {
     assert.equal(manifest.split(PAPER_CITATION_CONTRACT).length - 1, 1);
     assert.include(
       manifest,
-      "cite supporting passages at paragraph ends with [[cite:Q_x7a2]]",
+      "cite supporting passages at sentence ends, before the period",
     );
     assert.include(
       manifest,

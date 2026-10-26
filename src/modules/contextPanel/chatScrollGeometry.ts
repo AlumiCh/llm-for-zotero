@@ -155,6 +155,29 @@ function answerBlocks(wrapper: Element): Element[] {
     );
 }
 
+/**
+ * The answer block (paragraph, list item, table, …) that holds `element`, as
+ * an anchor's identity: it stays put when content above it in the same
+ * message changes height.
+ */
+export function findAnswerBlockForElement(
+  element: Element,
+): { block: Element; blockOrdinal: number; blockText: string } | null {
+  const wrapper = closestElement(element, ".llm-message-wrapper");
+  if (!wrapper) return null;
+  const blocks = answerBlocks(wrapper);
+  // The innermost one: a list item comes before the paragraphs inside it.
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    if (blocks[index].contains(element))
+      return {
+        block: blocks[index],
+        blockOrdinal: index,
+        blockText: blockText(blocks[index]),
+      };
+  }
+  return null;
+}
+
 function blockText(element: Element): string {
   return (element.textContent || "").trim().slice(0, 160);
 }

@@ -1,10 +1,10 @@
 /**
- * The Web sources tab's list, built from a chat's agent runs (no DOM).
+ * The web pages one agent run found and read, from its events (no DOM).
  *
- * Each question (an assistant answer made by an agent run) lists the pages its
- * run found with web_search and read with web_read. A page the answer cites
- * (its markers) is "cited". The text the agent got for a page (the web_read
- * page text, or else the search snippet) is kept for "What the agent read".
+ * The run's pages are the ones web_search found and web_read read. A page
+ * the answer cites (its markers) is "cited". The text the agent got for a
+ * page (the web_read page text, or else the search snippet) is kept for
+ * "What the agent read" (Task progress, `taskProgress/outside.ts`).
  */
 import type { AgentRunEventRecord } from "../../agent/types";
 import { looseWebUrlKey } from "../../webAccess/sourceLinks";
@@ -44,23 +44,6 @@ type PageReads = {
   outline: string[];
   totalChars: number;
 };
-
-export type WebSourceQuestionGroup = {
-  /** The question's position in the chat, from 1. */
-  questionNumber: number;
-  question: string;
-  runId: string;
-  sources: WebSourceListEntry[];
-};
-
-export type WebSourceChatMessage = {
-  role: "user" | "assistant";
-  text?: string;
-  agentRunId?: string;
-};
-
-const WEB_TOOL_EVENT_TYPES = ["tool_result", "final"] as const;
-export const WEB_SOURCE_EVENT_TYPES: readonly string[] = WEB_TOOL_EVENT_TYPES;
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object"
@@ -243,53 +226,4 @@ export function collectRunWebSources(
     }
   }
   return [...byKey.values()];
-}
-
-/**
- * The chat's questions that used the web, oldest first. A question is the
- * user message before the answer whose agent run found the pages.
- */
-export function buildWebSourceGroups(
-  messages: readonly WebSourceChatMessage[],
-  eventsByRun: ReadonlyMap<
-    string,
-    readonly Pick<AgentRunEventRecord, "payload">[]
-  >,
-): WebSourceQuestionGroup[] {
-  const groups: WebSourceQuestionGroup[] = [];
-  let lastQuestion = "";
-  let questionNumber = 0;
-  for (const message of messages) {
-    if (message.role === "user") {
-      lastQuestion = readText(message.text).replace(/\s+/g, " ");
-      questionNumber += 1;
-      continue;
-    }
-    const runId = readText(message.agentRunId);
-    if (!runId) continue;
-    const sources = collectRunWebSources(eventsByRun.get(runId) || []);
-    if (!sources.length) continue;
-    groups.push({
-      questionNumber: Math.max(1, questionNumber),
-      question: lastQuestion,
-      runId,
-      sources,
-    });
-  }
-  return groups;
-}
-
-/** Finds a page in the groups, newest question first. */
-export function findWebSourceEntry(
-  groups: readonly WebSourceQuestionGroup[],
-  url: string,
-): WebSourceListEntry | null {
-  const key = webSourceKey(url);
-  for (let index = groups.length - 1; index >= 0; index -= 1) {
-    const found = groups[index].sources.find(
-      (source) => webSourceKey(source.url) === key,
-    );
-    if (found) return found;
-  }
-  return null;
 }

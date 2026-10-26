@@ -59,11 +59,19 @@ import {
  * the answer as an html block and to save files only when the user wants the
  * file itself, into the chat's own folder (2026-10-22), to 40,269, 39,002 and
  * 40,367 (+405 each; a turn whose paper has a folder adds its path lines).
+ * Raised by the preview color sentence (draw SVG and HTML with currentColor
+ * and the named theme colors, so they read in light and dark), once in the
+ * response format and once in the html page rule (2026-10-25), to 40,715,
+ * 39,448 and 40,813 (+446 each).
+ * Raised by per-sentence citing (cite the passages that support a sentence
+ * before its final punctuation, with an example, and give a sentence without
+ * a supporting passage no token) (2026-10-26), to 40,914, 39,647 and 41,012
+ * (+199 each).
  */
 const TURN_BUDGETS: Record<string, number> = {
-  global: 40_269,
-  paper: 39_002,
-  collection: 40_367,
+  global: 40_914,
+  paper: 39_647,
+  collection: 41_012,
 };
 
 const TURNS: Record<string, Record<string, unknown>> = {

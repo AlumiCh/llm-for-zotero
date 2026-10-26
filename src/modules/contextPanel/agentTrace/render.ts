@@ -1,4 +1,4 @@
-import { fnv1a32Raw } from "../../../utils/fnv1a";
+import { fnv1a32, fnv1a32Raw } from "../../../utils/fnv1a";
 import { openWebSourceLink } from "../webSourcesSidePanel";
 import { CONTENT_FLAT_SCOPE_CLASS } from "../contentChrome";
 import type {
@@ -71,7 +71,11 @@ import {
   renderPlanDocumentContent,
   renderPlanDocumentFigures,
 } from "../planDocumentPresentation";
-import { buildAssistantDisplayMarkdownForRender } from "../assistantRichText";
+import { buildAssistantDisplayRenderPlan } from "../assistantRichText";
+import {
+  bindQuoteRenderOccurrences,
+  type QuoteRenderOccurrence,
+} from "../quoteRenderPlan";
 import { renderRenderedMarkdownInto } from "../renderedMarkdown";
 import { applyStableAnimationPhase } from "../stableAnimationPhase";
 import { isCodexPlanChecklistEvent } from "../taskProgress/codexPlan";
@@ -446,22 +450,41 @@ export function buildAgentTraceMarkdownForRender(
     "text" | "quoteCitations" | "quoteDisplayOverride" | "streaming"
   > | null,
 ): string {
-  const useDisplayOverride =
-    Boolean(message?.quoteDisplayOverride) &&
-    sanitizeText(text || "") === sanitizeText(message?.text || "");
-  const display = useDisplayOverride
-    ? message!.quoteDisplayOverride!
-    : {
-        markdown: text,
-        quoteCitations:
-          message?.quoteDisplayOverride?.quoteCitations ||
-          message?.quoteCitations,
-      };
-  return buildAssistantDisplayMarkdownForRender({
-    text: display.markdown || text || "",
-    quoteCitations: display.quoteCitations,
-    streaming: message?.streaming,
-  });
+  return planAgentTraceMarkdownForRender(text, message).markdown;
+}
+
+/**
+ * Trace text's markdown and the quote occurrences its tokens name. Text that
+ * is not the answer's own numbers its occurrences under a scope, so its cards
+ * never take the answer's ids; the hash keeps them stable across re-renders.
+ */
+function planAgentTraceMarkdownForRender(
+  text: string,
+  message?: Pick<
+    Message,
+    "text" | "quoteCitations" | "quoteDisplayOverride" | "streaming"
+  > | null,
+): { markdown: string; occurrences: QuoteRenderOccurrence[] } {
+  const cleanText = sanitizeText(text || "");
+  const isAnswerText = cleanText === sanitizeText(message?.text || "");
+  const display =
+    isAnswerText && message?.quoteDisplayOverride
+      ? message.quoteDisplayOverride
+      : {
+          markdown: text,
+          quoteCitations:
+            message?.quoteDisplayOverride?.quoteCitations ||
+            message?.quoteCitations,
+        };
+  return buildAssistantDisplayRenderPlan(
+    {
+      text: display.markdown || text || "",
+      quoteCitations: display.quoteCitations,
+      streaming: message?.streaming,
+    },
+    [],
+    isAnswerText ? undefined : fnv1a32(cleanText),
+  );
 }
 
 function normalizeSelectedTexts(
@@ -4355,7 +4378,11 @@ function shouldSuppressInlineFinalAnswer(
 ): boolean {
   if (item.type !== "inline_text") return false;
   const finalKey = normalizeInlineTextForDedupe(finalText);
-  const itemKey = normalizeInlineTextForDedupe(item.text);
+  // The streamed text still carries the web-source markers the final text
+  // leaves out.
+  const itemKey = normalizeInlineTextForDedupe(
+    stripWebSourceMarkersForDisplay(item.text),
+  );
   if (!finalKey || !itemKey) return false;
   if (finalKey === itemKey) return true;
   if (!intermediate) return finalKey.endsWith(` ${itemKey}`);
@@ -6542,10 +6569,11 @@ function syncDocumentLead(
     documentView.lead?.node.remove();
     const node = doc.createElement("div");
     node.className = `llm-agent-inline-text llm-plan-document-lead ${CONTENT_FLAT_SCOPE_CLASS}`;
-    const markdown = buildAgentTraceMarkdownForRender(
+    const { markdown, occurrences } = planAgentTraceMarkdownForRender(
       text,
       documentView.message,
     );
+    bindQuoteRenderOccurrences(node, occurrences);
     try {
       renderRenderedMarkdownInto(node, markdown, doc);
     } catch {
@@ -6854,6 +6882,9 @@ export function renderAgentTrace({
   const retained = previous ? traceViews.get(previous) : undefined;
   const wrap = retained ? previous! : doc.createElement("div");
   if (!retained) wrap.className = "llm-agent-activity";
+  // Task progress's "Show in answer" finds an answer drawn in the trace by it.
+  if (message.agentRunId?.trim())
+    wrap.dataset.agentRunId = message.agentRunId.trim();
   if (!retained)
     applyStableAnimationPhase(
       wrap,
@@ -7036,22 +7067,21 @@ export function renderAgentTrace({
         continue;
       }
       if (old && itemEntry.type === "inline_text" && message.streaming) {
-        renderStreamingMarkdownInto(
-          old.node,
-          buildAgentTraceMarkdownForRender(itemEntry.text, message),
-          doc,
-          () => {},
+        const streamed = planAgentTraceMarkdownForRender(
+          itemEntry.text,
+          message,
         );
+        bindQuoteRenderOccurrences(old.node, streamed.occurrences);
+        renderStreamingMarkdownInto(old.node, streamed.markdown, doc, () => {});
         place(old.node);
         continue;
       }
       if (itemEntry.type === "inline_text") {
         const inlineEl = doc.createElement("div");
         inlineEl.className = "llm-agent-inline-text";
-        const inlineText = buildAgentTraceMarkdownForRender(
-          itemEntry.text,
-          message,
-        );
+        const { markdown: inlineText, occurrences } =
+          planAgentTraceMarkdownForRender(itemEntry.text, message);
+        bindQuoteRenderOccurrences(inlineEl, occurrences);
         try {
           renderRenderedMarkdownInto(inlineEl, inlineText, doc);
         } catch {
@@ -7066,10 +7096,9 @@ export function renderAgentTrace({
         messageEl.className = `llm-agent-process-message llm-agent-process-message-${itemEntry.tone}`;
         if (itemEntry.markdown) {
           messageEl.classList.add("llm-agent-process-message-markdown");
-          const markdownText = buildAgentTraceMarkdownForRender(
-            itemEntry.text,
-            message,
-          );
+          const { markdown: markdownText, occurrences } =
+            planAgentTraceMarkdownForRender(itemEntry.text, message);
+          bindQuoteRenderOccurrences(messageEl, occurrences);
           try {
             renderRenderedMarkdownInto(messageEl, markdownText, doc, {
               sideItems: false,

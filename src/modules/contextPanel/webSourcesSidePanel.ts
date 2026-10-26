@@ -1,11 +1,12 @@
 /**
  * Web pages in the standalone window's side panel.
  *
- * A web source the agent used (a marker's row, or a link in an answer) opens
- * in the side panel's Web sources tab. The window registers a host for its
- * document; with no host (the Zotero item-pane sidebar) a page opens in the
- * default browser, as before. ⌘-click (Ctrl-click off macOS) always opens the
- * default browser.
+ * A source the agent used (a marker, a marker's row, or a link in an answer)
+ * shows in the side panel's Task progress tab: a marker lights its rows under
+ * its question, a link opens its page there. The window registers a host for
+ * its document; with no host (the Zotero item-pane sidebar) a page opens in
+ * the default browser, as before. ⌘-click (Ctrl-click off macOS) on a web
+ * page always opens the default browser.
  */
 import { normalizePublicWebUrl } from "../../webAccess/tavilyClient";
 
@@ -16,13 +17,29 @@ export type WebSourceLink = {
   organization?: string;
   hostname?: string;
   faviconUrl?: string;
+  /** "paper" for a scholarly paper. */
+  kind?: "paper";
+  /** The answer's run that cites it, when known. */
+  runId?: string;
+};
+
+/** The sources a marker (or one of its rows) names, in its answer's run. */
+export type SidePanelSourceTarget = {
+  /** The answer's run; its question is the one shown. */
+  runId?: string;
+  /** Row keys (`outsideSourceKey`). */
+  keys: string[];
 };
 
 export type SidePanelWebHost = {
-  /** Opens the Web sources list; `highlightUrls` are the clicked marker's. */
-  openSources: (highlightUrls: readonly string[]) => void;
-  /** Opens one page in the Web sources tab. */
+  /** Shows the sources in Task progress: their question open, rows lit. */
+  showSources: (target: SidePanelSourceTarget) => void;
+  /** Opens one page in the Task progress tab. */
   openPage: (link: WebSourceLink) => void;
+  /** How far the agent got with a source, for a marker's card. */
+  sourceState?: (
+    target: SidePanelSourceTarget,
+  ) => "read" | "skimmed" | "found" | null;
 };
 
 const hosts = new WeakMap<Document, SidePanelWebHost>();

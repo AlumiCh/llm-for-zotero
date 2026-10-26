@@ -1,6 +1,7 @@
 import { scheduleChatContentScroll } from "../chatScrollSnapshots";
 import {
   applyTaskDocumentCitations,
+  applyTaskOutsideEvent,
   applyTaskPaperUpdate,
   beginTaskRun,
   completeTaskRun,
@@ -8,6 +9,7 @@ import {
   markTaskAnswering,
   markTaskWaiting,
   setTaskOutcomes,
+  syncTaskAnswerCitations,
   taskTurnIndexFor,
 } from "../taskProgress/store";
 /**
@@ -360,6 +362,7 @@ export function createAgentTurnEventHandler(
           }),
           libraryID: runtimeRequest.libraryID,
         });
+        syncTaskAnswerCitations(conversationKey, { runId }, assistantMessage);
         return;
       default:
         // A Codex plan or a retired plan event never reaches this engine's
@@ -372,6 +375,9 @@ export function createAgentTurnEventHandler(
     if (assistantMessage.agentRunId) {
       pushTraceEvent(assistantMessage.agentRunId, event);
     }
+    // Searches, reads and markers of outside sources (and library searches)
+    // fill the question's groups in Task progress.
+    applyTaskOutsideEvent(conversationKey, assistantMessage.agentRunId, event);
     if (event.type !== "message_delta") {
       flushMessageDeltas(event.type === "final" ? "final" : "event");
     }
@@ -850,6 +856,11 @@ async function finalizeAgentTurnOutcome(ctx: {
     quoteCitations: assistantMessage.quoteCitations,
     libraryID: runtimeRequest.libraryID,
   });
+  syncTaskAnswerCitations(
+    conversationKey,
+    { runId: assistantMessage.agentRunId },
+    assistantMessage,
+  );
   if (!skipAssistantPersist) {
     await persistAssistantOnce();
   }

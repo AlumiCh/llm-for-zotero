@@ -3,10 +3,11 @@ import type { WebSourceAnchor } from "../../webAccess/types";
 import { normalizePublicWebUrl } from "../../webAccess/tavilyClient";
 import { t } from "../../utils/i18n";
 import { createWebFaviconImage, normalizeWebFaviconUrl } from "./webFavicon";
+import { outsideSourceKey } from "./taskProgress/outside";
 import {
   getSidePanelWebHost,
-  openWebSourceLink,
   wantsDefaultBrowser,
+  type SidePanelSourceTarget,
 } from "./webSourcesSidePanel";
 
 /** The marker shows at most this many site icons; "+N" counts the rest. */
@@ -19,6 +20,9 @@ export type WebSourcePopoverRow = {
   title: string;
   url: string;
   faviconUrl?: string;
+  /** "paper" for a scholarly paper; a web page has none. */
+  kind?: "paper";
+  sourceId?: string;
 };
 
 function anchorToken(index: number): string {
@@ -152,6 +156,8 @@ export function normalizeWebSourcePopoverRows(
           title,
           url: normalizePublicWebUrl(source.url),
           ...(faviconUrl ? { faviconUrl } : {}),
+          ...(source.kind === "paper" ? { kind: "paper" as const } : {}),
+          ...(source.sourceId ? { sourceId: source.sourceId } : {}),
         },
       ];
     } catch {
@@ -160,14 +166,21 @@ export function normalizeWebSourcePopoverRows(
   });
 }
 
+/** A row's key in Task progress (`outsideSourceKey`). */
+export function webSourceRowKey(
+  row: Pick<WebSourcePopoverRow, "kind" | "sourceId" | "url">,
+): string {
+  return outsideSourceKey(row);
+}
+
 /**
  * The marker's face: the first sites' icons, overlapping, and "+N" for the
  * sites past WEB_SOURCE_MARKER_MAX_ICONS. A site without an icon (or whose
- * icon fails to load) shows the globe in its place.
+ * icon fails to load) shows the globe in its place; a paper, a page.
  */
 export function buildWebSourceMarkerFace(
   doc: Document,
-  sources: readonly Pick<WebSourcePopoverRow, "faviconUrl">[],
+  sources: readonly Pick<WebSourcePopoverRow, "faviconUrl" | "kind">[],
 ): HTMLElement {
   const face = doc.createElement("span");
   face.className = "llm-web-source-marker";
@@ -177,7 +190,10 @@ export function buildWebSourceMarkerFace(
   const shown = sources.slice(0, WEB_SOURCE_MARKER_MAX_ICONS);
   shown.forEach((source, index) => {
     const icon = doc.createElement("span");
-    icon.className = "llm-web-source-marker-icon";
+    icon.className =
+      source.kind === "paper"
+        ? "llm-web-source-marker-icon llm-web-source-marker-icon-paper"
+        : "llm-web-source-marker-icon";
     // The first site sits on top.
     icon.style.zIndex = String(shown.length - index);
     const favicon = createWebFaviconImage(
@@ -205,33 +221,54 @@ export function buildWebSourceMarkerFace(
   return face;
 }
 
+const STATE_WORDS = {
+  read: "read",
+  skimmed: "skimmed",
+  found: "found",
+} as const;
+
 function buildSourceIndicator(
   doc: Document,
   anchor: WebSourceAnchor,
+  runId: string | undefined,
+  anchorIndex: number,
 ): HTMLElement | null {
   const sources = normalizeWebSourcePopoverRows(anchor);
   if (!sources.length) return null;
+  const keys = sources.map(webSourceRowKey);
+  const target = (only?: string): SidePanelSourceTarget => ({
+    ...(runId ? { runId } : {}),
+    keys: only ? [only] : keys,
+  });
 
-  return createSourcePopover(doc, {
-    label: t("View web sources"),
+  const indicator = createSourcePopover(doc, {
+    label: t("View sources"),
     icon: buildWebSourceMarkerFace(doc, sources),
     chipClassName: "llm-web-source-chip-sites",
-    // In the standalone window the marker lists its pages in the side panel.
-    onChipClick: (event) => {
+    // In the standalone window a marker shows its sources in Task progress,
+    // under its question, with their rows lit.
+    onChipClick: () => {
       const host = getSidePanelWebHost(doc);
-      if (!host || wantsDefaultBrowser(event)) return false;
-      host.openSources(sources.map((source) => source.url));
+      if (!host) return false;
+      host.showSources(target());
       return true;
     },
     populate: (popover, close) => {
-      for (const source of sources) {
+      const host = getSidePanelWebHost(doc);
+      sources.forEach((source, index) => {
+        const key = keys[index];
         const row = doc.createElement("button");
         row.type = "button";
         row.className = "llm-web-source-row";
-        row.title = `${t("Open web source")}: ${source.title}`;
+        row.title = host
+          ? `${t("Show in Task progress")}: ${source.title}`
+          : `${t("Open web source")}: ${source.title}`;
 
         const siteIcon = doc.createElement("span");
-        siteIcon.className = "llm-web-source-site-icon";
+        siteIcon.className =
+          source.kind === "paper"
+            ? "llm-web-source-site-icon llm-web-source-site-icon-paper"
+            : "llm-web-source-site-icon";
         siteIcon.setAttribute("aria-hidden", "true");
         const favicon = createWebFaviconImage(
           doc,
@@ -259,35 +296,36 @@ function buildSourceIndicator(
 
         content.append(organization, title);
         row.append(siteIcon, content);
+        const state = host?.sourceState?.(target(key));
+        if (state) {
+          const word = doc.createElement("span");
+          word.className = "llm-web-source-state";
+          word.textContent = t(STATE_WORDS[state]);
+          row.appendChild(word);
+        }
         row.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          // The side panel when the window has one; ⌘-click and the Zotero
-          // sidebar open the default browser.
+          // Task progress when the window has a side panel; ⌘-click on a web
+          // page, and the Zotero sidebar, open the default browser.
           if (
-            !openWebSourceLink(
-              doc,
-              {
-                url: source.url,
-                title: source.title,
-                organization: source.organization,
-                faviconUrl: source.faviconUrl,
-              },
-              event,
-            )
+            host &&
+            !(source.kind !== "paper" && wantsDefaultBrowser(event))
           ) {
+            host.showSources(target(key));
+          } else {
             launchWebSource(source.url);
           }
           row.blur();
           close();
         });
         popover.appendChild(row);
-      }
-      if (getSidePanelWebHost(doc)) {
+      });
+      if (host) {
         const hint = doc.createElement("span");
         hint.className = "llm-web-source-hint";
         hint.textContent = t(
-          "Opens in the side panel · {key}-click opens your browser",
+          "Click: show in Task progress · {key}-click a web page: your browser",
         ).replace("{key}", isMacRuntime() ? "⌘" : "Ctrl");
         popover.appendChild(hint);
       }
@@ -308,6 +346,8 @@ export function decorateWebSourceIndicators(
   root: HTMLElement,
   doc: Document,
   anchors: readonly WebSourceAnchor[],
+  /** The answer's run: a marker shows its question in Task progress. */
+  runId?: string,
 ): void {
   if (!anchors.length) return;
   const tokenPattern = new RegExp(`${ANCHOR_TOKEN_PREFIX}(\\d+)END`, "g");
@@ -329,7 +369,9 @@ export function decorateWebSourceIndicators(
         );
       }
       const anchor = anchors[Number(match[1])];
-      const indicator = anchor ? buildSourceIndicator(doc, anchor) : null;
+      const indicator = anchor
+        ? buildSourceIndicator(doc, anchor, runId, Number(match[1]))
+        : null;
       if (indicator) fragment.appendChild(indicator);
       cursor = match.index + match[0].length;
     }

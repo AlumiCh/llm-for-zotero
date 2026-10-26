@@ -7,6 +7,7 @@ import {
   findBestVisibleChatAnchor,
   findChatAnchorForElement,
   findElementForAnchor,
+  findAnswerBlockForElement,
 } from "./chatScrollGeometry";
 import { createCoalescedFrameScheduler } from "./setupHandlers/controllers/uiSchedulingController";
 
@@ -401,6 +402,10 @@ export function persistChatScrollSnapshotForConversationKey(
   chatScrollSnapshots.set(normalized, snapshot);
 }
 
+/**
+ * Where the target's top should sit, held by the closest thing that stays
+ * put: the answer block that holds it, else its message.
+ */
 function buildNavigationAnchor(
   targetElement: Element,
   viewportOffsetTop: number,
@@ -409,10 +414,26 @@ function buildNavigationAnchor(
   if (!wrapper) return null;
   const identity = getMessageAnchorForElement(wrapper);
   if (!identity.messageRole || !identity.messageTimestamp) return null;
+  const targetTop = getElementRect(targetElement)?.top ?? 0;
+  const found =
+    targetElement === wrapper ? null : findAnswerBlockForElement(targetElement);
+  if (found) {
+    return {
+      kind: "answerBlock",
+      ...identity,
+      blockOrdinal: found.blockOrdinal,
+      blockText: found.blockText,
+      viewportOffsetTop:
+        viewportOffsetTop -
+        (targetTop - (getElementRect(found.block)?.top ?? targetTop)),
+    };
+  }
   return {
     kind: "message",
     ...identity,
-    viewportOffsetTop,
+    viewportOffsetTop:
+      viewportOffsetTop -
+      (targetTop - (getElementRect(wrapper)?.top ?? targetTop)),
   };
 }
 
@@ -591,6 +612,7 @@ export function navigateChatToMessage(params: {
 }): boolean {
   const conversationKey = normalizeConversationKey(params.conversationKey);
   if (!conversationKey || !isChatViewportVisible(params.chatBox)) return false;
+  // Where the target's own top lands, below the chat's top.
   const viewportOffsetTop = Math.max(0, Number(params.viewportOffsetTop || 0));
   const anchor = buildNavigationAnchor(params.targetElement, viewportOffsetTop);
   if (!anchor) return false;

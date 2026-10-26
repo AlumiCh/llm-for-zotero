@@ -556,11 +556,11 @@ const zhCN: Record<string, string> = {
   "Tavily is temporarily unavailable. Try again later.":
     "Tavily 暂时不可用。请稍后重试。",
   "View web sources": "查看网页来源",
+  "View sources": "查看来源",
   "Web sources": "网页来源",
   "Supporting passages": "支持段落",
+  "Supporting passages {numbers}": "支持段落 {numbers}",
   "Quote {number}": "引文 {number}",
-  "{number} Quote": "{number} 条引文",
-  "{number} Quotes": "{number} 条引文",
   "Open web source": "打开网页来源",
   "MinerU PDF Parsing": "MinerU PDF 解析",
   "Extract high-quality structured text from PDFs with preserved math formulas, tables, and figures. MinerU dramatically improves how the AI understands your papers.":
@@ -1466,6 +1466,10 @@ const zhCN: Record<string, string> = {
   "Question {number}": "第 {number} 个问题",
   "Papers ({count})": "论文（{count}）",
   "Cited in answer": "回答中的引用",
+  "In the answer": "回答中",
+  "Read, not cited ({count})": "已读但未引用（{count}）",
+  "Named in the answer, no passage": "回答中提到，未引用段落",
+  "p. {page}": "第 {page} 页",
   "Cited in document": "文档中的引用",
   "Listed in scope; not read for this question.": "在范围内；本问题未阅读。",
   "Matched by title or abstract; text not opened.":
@@ -1487,7 +1491,6 @@ const zhCN: Record<string, string> = {
   Page: "页面",
   "PDF text": "PDF 文本",
   "No text": "无文本",
-  "title/abstract": "标题/摘要",
   "1 passage": "1 段",
   Summary: "总结",
   "Summary failed": "总结失败",
@@ -1504,7 +1507,6 @@ const zhCN: Record<string, string> = {
   "{count} passages": "{count} 段",
   outline: "大纲",
   abstract: "摘要",
-  "cited {count}": "引用 {count}",
   listed: "已列出",
   matched: "已匹配",
   skimmed: "已略读",
@@ -1584,6 +1586,9 @@ const zhCN: Record<string, string> = {
   "No PDF for this paper": "这篇论文没有 PDF",
   "Could not open the paper.": "无法打开论文。",
   "Opened the paper": "已打开论文",
+  "Couldn't find that sentence in the answer; showing the answer":
+    "在回答中找不到这句话，已显示该回答",
+  "Couldn't find that sentence in the chat": "在对话中找不到这句话",
 
   // ── Language setting ────────────────────────────────────────────────────
   Language: "语言",

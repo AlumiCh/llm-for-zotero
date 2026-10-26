@@ -173,6 +173,18 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
       srcdoc.indexOf("<script>"),
       "the CSP comes before any script",
     );
+    // The page sets its own colours (none of the theme's), so it is shown on a
+    // white card in every theme, with the light sheet after the CSP.
+    assert.equal(preview.getAttribute("data-llm-preview-surface"), "paper");
+    assert.include(
+      srcdoc,
+      `${HTML_PREVIEW_CSP_META}<style>:root{color-scheme:light}</style>`,
+    );
+    assert.equal(
+      mainWin.getComputedStyle(preview)?.backgroundColor,
+      "rgb(255, 255, 255)",
+      "a paper page sits on a white card",
+    );
 
     // The page ran, and reports what it could reach.
     let contentDoc: Document | null = null;
@@ -237,6 +249,70 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
     preview.scrollIntoView?.({ block: "center" });
     await Zotero.Promise.delay(300);
     await shoot(mainWin, "sidebar-html-block.png");
+  });
+
+  it("recolors themed drawings and pages when the standalone window switches theme", async function () {
+    const THEME_PREF = "browser.theme.toolbar-theme";
+    const themedSvg =
+      '```svg\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 60" width="120" height="60"><text x="4" y="14">Themed</text><path d="M4 50 L116 50" style="stroke:var(--llm-blue)"/></svg>\n```';
+    const themedHtml =
+      '```html\n<!DOCTYPE html><html><body><h3 style="color:var(--llm-text)">Themed page</h3></body></html>\n```';
+    Zotero.Prefs.set(THEME_PREF, 1, true);
+    try {
+      const fixture = await api.createPaperWithPdfFixture({
+        title: "Theme switch paper",
+        pdfTitle: "Theme switch paper PDF",
+      });
+      fixtures.push(fixture);
+      await api.openStandaloneForItem(fixture.parentItemId);
+      win = (Zotero as any).LLMForZotero.data.standaloneWindow as Window;
+      await api.seedStandaloneConversation([
+        { role: "user", text: "Draw it in the theme colours" },
+        {
+          role: "assistant",
+          text: `A drawing.\n\n${themedSvg}\n\nA page.\n\n${themedHtml}`,
+        },
+      ]);
+      let drawing = () =>
+        q('.llm-svg-preview[data-llm-preview-surface="themed"]');
+      let page = () =>
+        q('.llm-html-preview[data-llm-preview-surface="themed"]');
+      const pageFrame = () => page()?.querySelector("iframe") || null;
+      const state = () =>
+        `drawing=${drawing()?.getAttribute("data-llm-preview-theme")} frame=${pageFrame()?.getAttribute("data-llm-preview-theme")}`;
+      await until(
+        () => state() === "drawing=light frame=light",
+        () => `light theme: ${state()}`,
+      );
+
+      // Let the window settle, so no late render of its own hides a missed
+      // theme change.
+      await Zotero.Promise.delay(1000);
+      // The previews already shown must follow the switch themselves, not be
+      // replaced by a rebuilt answer.
+      const shownDrawing = drawing()!;
+      const shownPage = page()!;
+      drawing = () => shownDrawing;
+      page = () => shownPage;
+      Zotero.Prefs.set(THEME_PREF, 0, true);
+      await until(
+        () => state() === "drawing=dark frame=dark",
+        () => `after the switch to dark: ${state()}`,
+      );
+      const src = drawing()!.querySelector("img")!.getAttribute("src") || "";
+      assert.include(
+        win.atob(src.split(",")[1] || ""),
+        'data-llm-theme="dark"',
+        "the drawing carries the dark sheet",
+      );
+      assert.include(
+        pageFrame()!.getAttribute("srcdoc") || "",
+        ":root{color-scheme:dark;",
+        "the new frame carries the dark sheet",
+      );
+    } finally {
+      Zotero.Prefs.clear(THEME_PREF, true);
+    }
   });
 
   it("moves each item kind into its own tab, focuses instead of duplicating, and shows the source", async function () {
@@ -456,7 +532,7 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
     );
   });
 
-  it("lists three launch rows on the new tab page, and Miscellaneous opens items in place", async function () {
+  it("lists four launch rows on the new tab page, and Miscellaneous opens items in place", async function () {
     const fixture = await api.createPaperWithPdfFixture({
       title: "Miscellaneous list paper",
       pdfTitle: "Miscellaneous list paper PDF",
@@ -499,19 +575,34 @@ describe("workflow: html preview, move buttons, and the Miscellaneous tab", func
     assert.isTrue(state.open);
     state = await api.clickStandaloneSidePanelControl("new-tab");
     assert.equal(state.view, "newtab");
-    const rows = qa("[data-side-launch]");
+    let rows = qa("[data-side-launch]");
     assert.deepEqual(
       rows.map((row) => row.getAttribute("data-side-launch")),
-      ["sidechat", "history", "misc"],
+      ["sidechat", "history", "misc", "progress"],
     );
     assert.deepEqual(
       rows.map(
         (row) =>
           row.querySelector(".llm-standalone-nav-label")?.textContent || "",
       ),
-      ["Side chat", "History", "Miscellaneous"],
+      ["Side chat", "History", "Miscellaneous", "Task progress"],
     );
-    await shoot(win, "newtab-three-rows.png");
+    await shoot(win, "newtab-four-rows.png");
+
+    // Task progress: its row opens the Task progress side tab.
+    (rows[3] as HTMLElement).click();
+    await until(
+      () =>
+        qa(".llm-standalone-side-panel-tab[data-side-tab-kind='progress']")
+          .length === 1,
+      () =>
+        `tabs: ${qa(".llm-standalone-side-panel-tab")
+          .map((tab) => tab.dataset.sideTabKind)
+          .join(",")}`,
+    );
+    state = await api.clickStandaloneSidePanelControl("new-tab");
+    assert.equal(state.view, "newtab");
+    rows = qa("[data-side-launch]");
 
     // Miscellaneous: items newest first with kind chips.
     (rows[2] as HTMLElement).click();

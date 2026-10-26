@@ -9,8 +9,29 @@ import {
   TASK_PROGRESS_OPEN_PASSAGE_EVENT,
   TASK_PROGRESS_REMOVE_PAPER_EVENT,
 } from "./taskProgress/view";
+import {
+  TASK_PROGRESS_OFFER_EVENT,
+  TASK_PROGRESS_OPEN_SOURCE_EVENT,
+  TASK_PROGRESS_SHOW_IN_ANSWER_EVENT,
+  type TaskProgressOfferDetail,
+  type TaskProgressOpenSourceDetail,
+  type TaskProgressShowInAnswerDetail,
+} from "./taskProgress/outsideView";
 import type { TaskPaperPassageTarget } from "./taskProgress/passageSource";
-import { navigateToTaskPaperPassage } from "./assistantCitationLinks";
+import {
+  findCitationChipForItem,
+  navigateToTaskPaperPassage,
+} from "./assistantCitationLinks";
+import { openWebSourceLink } from "./webSourcesSidePanel";
+import {
+  clearAnswerQuoteHighlights,
+  findAnswerRoots,
+  highlightAnswerQuote,
+  highlightAnswerQuoteCard,
+  highlightSentenceBeforeMark,
+  sentenceClosingMarks,
+  pulseAnswerQuote,
+} from "./answerQuoteHighlight";
 import { resolveTaskPaperScopeItemIds } from "../../agent/context/taskPaperScopeListing";
 import { libraryIndexService } from "../../services/libraryIndexService";
 import { createNoteConversationItem } from "../../services/notes/conversationItem";
@@ -60,7 +81,11 @@ import {
   PREFERENCES_PANE_ID,
 } from "./constants";
 import { bindChatScrollLifecycle } from "./chatScrollLifecycle";
-import { isChatViewportVisible } from "./chatScrollSnapshots";
+import {
+  isChatViewportVisible,
+  navigateChatToMessage,
+} from "./chatScrollSnapshots";
+import { flushPendingChatRender } from "./progressiveChatRender";
 import { bindChatLatestButton } from "./chatLatestButton";
 import {
   createConversationTurnNavigator,
@@ -5019,6 +5044,204 @@ export function setupHandlers(
         appLogger.warn("LLM task progress passage open failed", error);
       },
     );
+  });
+  // "Open page" on a scholarly paper or web page: the side panel's page view
+  // when the window has one, otherwise the default browser.
+  body.addEventListener(TASK_PROGRESS_OPEN_SOURCE_EVENT, (event: Event) => {
+    const source = (event as CustomEvent<TaskProgressOpenSourceDetail>).detail
+      ?.source;
+    if (!source?.url) return;
+    openWebSourceLink(body.ownerDocument, {
+      url: source.url,
+      title: source.title,
+      organization: source.organization,
+      hostname: source.hostname,
+      faviconUrl: source.faviconUrl,
+      ...(source.kind === "paper" ? { kind: "paper" as const } : {}),
+      runId: (event as CustomEvent<TaskProgressOpenSourceDetail>).detail.runId,
+    });
+  });
+  // "Show in answer": scroll the chat to the sentence that uses the source,
+  // light it, and flash its marker (or a library paper's quote chip).
+  let clearAnswerLight: ((event: Event) => void) | null = null;
+  body.addEventListener(TASK_PROGRESS_SHOW_IN_ANSWER_EVENT, (event: Event) => {
+    const detail = (event as CustomEvent<TaskProgressShowInAnswerDetail>)
+      .detail;
+    if (!detail?.key) return;
+    const chatBox = body.querySelector(
+      "#llm-chat-box",
+    ) as HTMLDivElement | null;
+    // Older turns of a long conversation may still be waiting to be drawn.
+    flushPendingChatRender(chatBox);
+    clearAnswerQuoteHighlights(body);
+    const roots = findAnswerRoots(body, detail.runId);
+    // A cited passage: every sentence that cites it, by its marks.
+    const passage = detail.citationId
+      ? lightCitedPassage(roots, detail.citationId, detail.texts || [])
+      : null;
+    const mark = passage ? passage.mark : findAnswerSourceMark(detail);
+    const lit = passage
+      ? passage.lit
+      : detail.text
+        ? highlightAnswerQuote(roots, detail.text, mark)
+        : [];
+    // Never a click that does nothing: without the sentence or its marker,
+    // the run's answer itself, and a line that says so.
+    const own = detail.runId ? roots[0] : undefined;
+    const target = lit[0] || mark || own;
+    if (!lit.length && !mark && status && (detail.text || detail.citationId))
+      setStatus(
+        status,
+        target
+          ? t("Couldn't find that sentence in the answer; showing the answer")
+          : t("Couldn't find that sentence in the chat"),
+        "warning",
+      );
+    if (!target) return;
+    const win = body.ownerDocument?.defaultView;
+    // Its start at the top of what shows of the chat: a long sentence reads
+    // down from there, above the chips and composer. As a navigation, so a
+    // chat that was following its last answer stops pulling back down.
+    const navigated =
+      chatBox &&
+      navigateChatToMessage({
+        conversationKey: Number(panelRoot.dataset.itemId),
+        chatBox,
+        targetElement: target,
+        behavior: win?.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
+          ? "auto"
+          : "smooth",
+        // Its first line below what covers the chat's top (the standalone
+        // window's title row runs over it), with the chat's own gap.
+        viewportOffsetTop:
+          (Number.parseFloat(
+            win?.getComputedStyle(chatBox)?.scrollPaddingTop || "0",
+          ) || 0) + coveredTopOf(chatBox),
+      });
+    if (!navigated) {
+      try {
+        target.scrollIntoView({ block: "start", behavior: "smooth" });
+      } catch {
+        target.scrollIntoView();
+      }
+    }
+    pulseAnswerQuote(lit);
+    if (mark) {
+      mark.classList.remove("llm-web-source-flash");
+      void mark.getBoundingClientRect();
+      mark.classList.add("llm-web-source-flash");
+      win?.setTimeout(
+        () => mark.classList.remove("llm-web-source-flash"),
+        1600,
+      );
+    }
+    if (lit.length) {
+      // The light stays until the next click in the chat, not on the
+      // scrollbar or the lit words (to select and copy them).
+      const chat = body.querySelector("#llm-chat-box") || body;
+      if (clearAnswerLight)
+        chat.removeEventListener("mousedown", clearAnswerLight);
+      const clear = (event: Event) => {
+        const hit = event.target as Element | null;
+        if (hit === chat || lit.some((node) => hit && node.contains(hit)))
+          return;
+        chat.removeEventListener("mousedown", clear);
+        clearAnswerLight = null;
+        clearAnswerQuoteHighlights(body);
+      };
+      clearAnswerLight = clear;
+      win?.setTimeout(() => {
+        if (clearAnswerLight === clear)
+          chat.addEventListener("mousedown", clear);
+      }, 0);
+    }
+  });
+  /**
+   * Light each sentence that cites a passage near the answer's marks that
+   * hold its id (the nth sentence by the mark that closes it); a sentence
+   * whose words are not found lights as its mark's own sentence. A passage the answer
+   * only quotes lights its card. In reading order, with its first mark.
+   */
+  const lightCitedPassage = (
+    roots: readonly HTMLElement[],
+    citationId: string,
+    texts: readonly string[],
+  ): { mark: HTMLElement | null; lit: HTMLElement[] } => {
+    const marks = roots.flatMap(
+      (root) =>
+        Array.from(
+          root.querySelectorAll(".llm-paper-cite-mark[data-citation-ids]"),
+        ) as HTMLElement[],
+    );
+    const own = marks.filter((node) =>
+      (node.dataset.citationIds || "").split(" ").includes(citationId),
+    );
+    const lit: HTMLElement[] = [];
+    const add = (nodes: readonly HTMLElement[]) => {
+      for (const node of nodes) if (!lit.includes(node)) lit.push(node);
+    };
+    // One mark per sentence, as `texts` has one entry per sentence.
+    const closing = sentenceClosingMarks(own);
+    texts.forEach((text, index) => {
+      const near = closing[index] || own[0] || null;
+      const found = text ? highlightAnswerQuote(roots, text, near) : [];
+      if (found.length) add(found);
+      else if (closing[index]) add(highlightSentenceBeforeMark(closing[index]));
+    });
+    if (!lit.length)
+      for (const node of own) add(highlightSentenceBeforeMark(node));
+    if (!lit.length) add(highlightAnswerQuoteCard(roots, citationId));
+    lit.sort((left, right) =>
+      left.compareDocumentPosition(right) & 4 ? -1 : 1,
+    );
+    return { mark: own[0] || null, lit };
+  };
+  const findAnswerSourceMark = (
+    detail: TaskProgressShowInAnswerDetail,
+  ): HTMLElement | null => {
+    const indicators = Array.from(
+      body.querySelectorAll(".llm-web-source-indicator"),
+    ) as HTMLElement[];
+    const ofRun = (node: HTMLElement, runId?: string) =>
+      !runId || node.dataset.runId === runId;
+    // The quote's own marker first.
+    if (detail.anchor !== undefined) {
+      const own =
+        indicators.find(
+          (node) =>
+            ofRun(node, detail.runId) &&
+            node.dataset.anchorIndex === String(detail.anchor),
+        ) || null;
+      if (own) return own;
+    }
+    const marks = (runId?: string) =>
+      indicators.find(
+        (node) =>
+          ofRun(node, runId) &&
+          node.dataset.placement !== "end" &&
+          (node.dataset.sourceKeys || "").split(" ").includes(detail.key),
+      ) || null;
+    const itemId = Number(detail.itemId);
+    const chip = (runId?: string) =>
+      itemId > 0 ? findCitationChipForItem(body, itemId, runId) : null;
+    // Only the run's own: another answer's chip would lead to that answer.
+    return marks(detail.runId) || chip(detail.runId);
+  };
+  // "Search scholarly sources too" / "Search the web too": ask it as a
+  // follow-up.
+  body.addEventListener(TASK_PROGRESS_OFFER_EVENT, (event: Event) => {
+    const what = (event as CustomEvent<TaskProgressOfferDetail>).detail?.what;
+    if (what !== "scholarly" && what !== "web") return;
+    if (!item || isRequestPending(getConversationKey(item))) return;
+    void doSend({
+      overrideText:
+        what === "web"
+          ? t("Yes, search the web too.")
+          : t("Yes, search scholarly sources too."),
+      // The composer's own draft stays; nothing to put back if it fails.
+      preserveInputDraft: true,
+      restoreQueuedInput: () => undefined,
+    });
   });
   const removeTaskProgressPaper = async (event: Event) => {
     if (!item) return;

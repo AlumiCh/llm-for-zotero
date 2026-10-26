@@ -8,6 +8,15 @@
  */
 
 import { t } from "../../utils/i18n";
+import {
+  PREVIEW_SURFACE_ATTRIBUTE,
+  PREVIEW_THEME_ATTRIBUTE,
+  buildHtmlPreviewThemeSheet,
+  needsPreviewThemeSheet,
+  previewSurfaceFor,
+  previewThemeFor,
+  type PreviewThemeKey,
+} from "../../utils/previewTheme";
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
@@ -28,10 +37,24 @@ export const HTML_PREVIEW_CSP_META = `<meta http-equiv="Content-Security-Policy"
 const SRCDOC_PREAMBLE_PATTERN =
   /^(\s*<!doctype[^>]*>)?(\s*<html(?:\s[^>]*)?>)?(\s*<head(?:\s[^>]*)?>)?/i;
 
-/** The frame document: the CSP meta first, so it is parsed before the markup. */
-export function buildHtmlPreviewSrcdoc(source: string): string {
+/**
+ * The frame document: the CSP meta first, so it is parsed before the markup.
+ * With an app theme, the theme sheet (previewTheme.ts) follows the meta, still
+ * ahead of the model's own markup.
+ */
+export function buildHtmlPreviewSrcdoc(
+  source: string,
+  appTheme?: PreviewThemeKey,
+): string {
   const preamble = source.match(SRCDOC_PREAMBLE_PATTERN)?.[0] ?? "";
-  return `${preamble}${HTML_PREVIEW_CSP_META}${source.slice(preamble.length)}`;
+  const sheet = appTheme
+    ? buildHtmlPreviewThemeSheet(
+        previewThemeFor(source, appTheme),
+        previewSurfaceFor(source),
+        needsPreviewThemeSheet(source),
+      )
+    : "";
+  return `${preamble}${HTML_PREVIEW_CSP_META}${sheet}${source.slice(preamble.length)}`;
 }
 
 export const HTML_PREVIEW_STOPPED_TEXT =
@@ -73,6 +96,7 @@ export function createSandboxedHtmlFrame(
   doc: Document,
   source: string,
   className = "llm-html-preview-frame",
+  appTheme?: PreviewThemeKey,
 ): HTMLIFrameElement {
   const frame = doc.createElementNS(XHTML_NS, "iframe") as HTMLIFrameElement;
   // The sandbox must be in place before srcdoc is set and before the frame
@@ -81,7 +105,16 @@ export function createSandboxedHtmlFrame(
   frame.setAttribute("referrerpolicy", "no-referrer");
   frame.setAttribute("title", t("HTML preview"));
   frame.setAttribute("class", className);
+  if (appTheme) {
+    // A page's colors are fixed when its frame is built: a theme change
+    // builds a new frame (srcdoc is never set twice, see the guard below).
+    frame.setAttribute(PREVIEW_SURFACE_ATTRIBUTE, previewSurfaceFor(source));
+    frame.setAttribute(
+      PREVIEW_THEME_ATTRIBUTE,
+      previewThemeFor(source, appTheme),
+    );
+  }
   guardHtmlPreviewNavigation(doc, frame);
-  frame.setAttribute("srcdoc", buildHtmlPreviewSrcdoc(source));
+  frame.setAttribute("srcdoc", buildHtmlPreviewSrcdoc(source, appTheme));
   return frame;
 }

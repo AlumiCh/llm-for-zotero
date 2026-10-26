@@ -31,6 +31,7 @@ import {
   taskTurnIndexFor,
 } from "./taskProgress/store";
 import { flushTaskProgressPanels } from "./taskProgress/panel";
+import { findCurrentTaskProgressSteps } from "./taskProgress/view";
 import { flushPendingChatRender } from "./progressiveChatRender";
 
 /** The run events Task progress rebuilds from; streaming text reads none. */
@@ -49,6 +50,8 @@ export type StreamingReplayResult = {
   exactReasoning: boolean;
   statusVisible: boolean;
   progressUpdatePreserved: boolean;
+  closedUpdateShownOnOpen: boolean;
+  closedDrawerStepsText?: string;
   finalAnswerVisible: boolean;
   answerVisibleBeforeFinal: boolean;
   actionCardHiddenWhileStreaming: boolean;
@@ -240,13 +243,10 @@ export async function exerciseStreamingReplay(
       ".llm-plan-progress-floating, .llm-plan-container-execution",
     ).length;
   let floatingCapsuleNodes = countFloating();
-  const stepsHost = body.querySelector<HTMLElement>(
-    ".llm-task-progress-steps",
-  )!;
   const findProgress = () =>
-    stepsHost.hidden
-      ? null
-      : stepsHost.querySelector<HTMLElement>(".llm-task-progress-steps-body");
+    findCurrentTaskProgressSteps(body)?.querySelector<HTMLElement>(
+      ".llm-task-progress-steps-body",
+    ) ?? null;
   const stepsShown = () => {
     flushTaskProgressPanels();
     floatingCapsuleNodes += countFloating();
@@ -284,6 +284,7 @@ export async function exerciseStreamingReplay(
     exactReasoning: false,
     statusVisible: false,
     progressUpdatePreserved: false,
+    closedUpdateShownOnOpen: false,
     finalAnswerVisible: false,
     answerVisibleBeforeFinal: false,
     actionCardHiddenWhileStreaming: !findWrapper().querySelector(
@@ -310,7 +311,10 @@ export async function exerciseStreamingReplay(
   const observer = new win.MutationObserver((mutations) => {
     result.progressMutations += mutations.length;
   });
-  for (const target of [stepsHost, trigger]) {
+  for (const target of [
+    findCurrentTaskProgressSteps(body) || trigger,
+    trigger,
+  ]) {
     observer.observe(target, {
       childList: true,
       subtree: true,
@@ -458,6 +462,10 @@ export async function exerciseStreamingReplay(
         outcome("coverage", "Checking corpus coverage", "pending"),
       ],
     };
+    // A started answer folds the drawer, and a folded drawer is not repainted
+    // (the steps live in its question sections): open it again, so the update
+    // lands in the block that shows, which must stay the same element.
+    if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
     await handle({ type: "execution_checkpoint", checkpoint: changed });
     stepsShown();
     result.progressUpdatePreserved =
@@ -467,6 +475,30 @@ export async function exerciseStreamingReplay(
       progress.querySelector(".llm-plan-task-list")?.firstElementChild ===
         task &&
       Boolean(progress.textContent?.includes("Checking corpus coverage"));
+    // A step that arrives while the drawer is closed must show at once when
+    // the drawer opens again.
+    if (trigger.getAttribute("aria-expanded") === "true") trigger.click();
+    await nextFrame();
+    const closedFirst = trigger.getAttribute("aria-expanded") !== "true";
+    await handle({
+      type: "execution_checkpoint",
+      checkpoint: {
+        ...changed,
+        updatedAt: 3,
+        tasks: [
+          ...changed.tasks,
+          outcome("closed-step", "Ranking closed drawer papers", "pending"),
+        ],
+      },
+    });
+    trigger.click();
+    stepsShown();
+    const closedStepsText = findCurrentTaskProgressSteps(body)?.textContent;
+    result.closedUpdateShownOnOpen =
+      closedFirst &&
+      Boolean(closedStepsText?.includes("Ranking closed drawer papers"));
+    if (!result.closedUpdateShownOnOpen)
+      result.closedDrawerStepsText = `closedFirst=${closedFirst} steps=${closedStepsText}`;
     const composer = ui.inputBox!;
     composer.focus({ preventScroll: true });
     composer.value = "Draft ";
@@ -657,6 +689,7 @@ async function exerciseChatStreamingReplay(
     exactReasoning: true,
     statusVisible: false,
     progressUpdatePreserved: true,
+    closedUpdateShownOnOpen: true,
     finalAnswerVisible: false,
     answerVisibleBeforeFinal: false,
     actionCardHiddenWhileStreaming: true,

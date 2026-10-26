@@ -33,12 +33,51 @@ const WRAPPED_MARKER_PATTERN =
   /^`\s*<!--\s*llm-web-source\s*:\s*([^<>]*?)\s*-->\s*`$/i;
 const RESIDUAL_MARKER_PATTERN = /<!--\s*llm-web-source/i;
 const STREAMING_MARKER_WORD = "llm-web-source:";
+/**
+ * A marker's sources: "web_3,web_5" or, with the exact words the answer took
+ * from each, 'web_3="words from the page",web_5'. A phrase holds no double
+ * quote; curly quotes around it are taken too.
+ */
+export function parseWebSourceMarkerValue(value: string): {
+  ids: string[];
+  phrases: Record<string, string>;
+} {
+  const ids: string[] = [];
+  const phrases: Record<string, string> = {};
+  const entry = /^\s*([^,="“”]*?)\s*(?:=\s*["“]([^"“”]*)["”]?)?\s*(?:,|$)/;
+  let rest = value;
+  while (rest.trim()) {
+    const match = entry.exec(rest);
+    if (!match || !match[0]) break;
+    const id = match[1].trim();
+    const phrase = (match[2] || "").replace(/\s+/g, " ").trim();
+    if (id) {
+      if (!ids.includes(id)) ids.push(id);
+      if (phrase && !phrases[id]) phrases[id] = phrase;
+    }
+    rest = rest.slice(match[0].length);
+  }
+  return { ids, phrases };
+}
+
+function formatMarkerValue(
+  ids: readonly string[],
+  phrases: Readonly<Record<string, string>>,
+): string {
+  return ids
+    .map((id) => (phrases[id] ? `${id}="${phrases[id]}"` : id))
+    .join(",");
+}
+
 function canonicalMarker(rawIds: string): string {
-  const ids = rawIds
-    .split(",")
-    .map((id) => id.trim().toLowerCase())
-    .filter(Boolean);
-  return `${MARKER_PREFIX}${ids.join(",")}-->`;
+  const parsed = parseWebSourceMarkerValue(rawIds);
+  const phrases: Record<string, string> = {};
+  const ids = parsed.ids.map((id) => {
+    const lower = id.toLowerCase();
+    if (parsed.phrases[id]) phrases[lower] = parsed.phrases[id];
+    return lower;
+  });
+  return `${MARKER_PREFIX}${formatMarkerValue(ids, phrases)}-->`;
 }
 
 function canonicalizeLine(line: string): string {
@@ -503,15 +542,16 @@ function repairProtectedLine(line: string): string {
       },
     );
   if (!prose.trim()) return line;
-  const ids = Array.from(
-    new Set(
-      matches
-        .flatMap((match) => match[1].split(","))
-        .map((id) => id.trim())
-        .filter(Boolean),
-    ),
-  );
-  return `${prose.trimEnd()}${MARKER_PREFIX}${ids.join(",")}-->`;
+  const ids: string[] = [];
+  const phrases: Record<string, string> = {};
+  for (const match of matches) {
+    const parsed = parseWebSourceMarkerValue(match[1]);
+    for (const id of parsed.ids) {
+      if (!ids.includes(id)) ids.push(id);
+      if (parsed.phrases[id] && !phrases[id]) phrases[id] = parsed.phrases[id];
+    }
+  }
+  return `${prose.trimEnd()}${MARKER_PREFIX}${formatMarkerValue(ids, phrases)}-->`;
 }
 
 /**
@@ -539,7 +579,11 @@ export function assessWebAttribution(
   const canonicalText = canonicalizeWebSourceMarkers(text);
   const inlined = known.size
     ? inlineSourceLinks(canonicalText, linkIds)
-    : { text: canonicalText, tokens: [] as string[][] };
+    : {
+        text: canonicalText,
+        tokens: [] as string[][],
+        phrases: [] as Record<string, string>[],
+      };
   const usesSources = collected.webToolsRan || known.size > 0;
   const repairedText = usesSources
     ? repairMidLineMarkers(
@@ -583,9 +627,7 @@ export function assessWebAttribution(
     // A none marker is removed; next to citations it adds nothing to the
     // end chip.
     if (marker.value === "none") continue;
-    const ids = Array.from(
-      new Set(marker.value.split(",").map((value) => value.trim())),
-    ).filter(Boolean);
+    const { ids, phrases } = parseWebSourceMarkerValue(marker.value);
     const placed = ids.filter(isKnown);
     if (placed.length < ids.length || !ids.length) incomplete = true;
     const placeable =
@@ -600,23 +642,37 @@ export function assessWebAttribution(
       endIds.push(...placed);
       continue;
     }
+    const placedPhrases = phrasesFor(placed, phrases);
     anchors.push({
       offset: cleanOffsetForMarker(marker, markers.slice(0, index)),
       sources: placed.map((id) => known.get(id)!),
+      ...(placedPhrases ? { phrases: placedPhrases } : {}),
     });
   }
   const strippedText = stripOccurrences(normalizedText, markers);
   // The inline tokens come out last: every offset so far counts them.
-  const extracted = extractInlineSourceTokens(strippedText, inlined.tokens);
+  const extracted = extractInlineSourceTokens(
+    strippedText,
+    inlined.tokens,
+    inlined.phrases,
+  );
   for (const anchor of anchors)
     anchor.offset = extracted.mapOffset(anchor.offset);
   for (const entry of extracted.inline) {
-    const sources = entry.ids.flatMap((id) => known.get(id) || []);
+    const ids = entry.ids.filter((id) => known.has(id));
+    const sources = ids.map((id) => known.get(id)!);
+    const inlinePhrases = phrasesFor(ids, entry.phrases);
     if (sources.length)
-      anchors.push({ offset: entry.offset, sources, placement: "inline" });
+      anchors.push({
+        offset: entry.offset,
+        sources,
+        placement: "inline",
+        ...(inlinePhrases ? { phrases: inlinePhrases } : {}),
+      });
   }
   anchors.sort((left, right) => left.offset - right.offset);
   const cleanText = soleNone ? extracted.text.trimEnd() : extracted.text;
+  foldRepeatedLineSources(anchors, cleanText);
   if (collected.webToolsRan && !soleNone && (!anchors.length || incomplete)) {
     const shown = new Set(
       anchors.flatMap((anchor) =>
@@ -637,6 +693,58 @@ export function assessWebAttribution(
     return { status: "not_used", cleanText, anchors: [] };
   }
   return { status: "valid", cleanText, anchors, dropped };
+}
+
+function phrasesFor(
+  ids: readonly string[],
+  phrases: Readonly<Record<string, string>>,
+): Record<string, string> | null {
+  const kept: Record<string, string> = {};
+  for (const id of ids) if (phrases[id]) kept[id] = phrases[id];
+  return Object.keys(kept).length ? kept : null;
+}
+
+/**
+ * A source a line already shows with an inline marker (its link) and that
+ * the line's end marker repeats, to give its exact words, is shown once: the
+ * words go to the inline marker, and an end marker left with no source goes.
+ */
+function foldRepeatedLineSources(
+  anchors: WebSourceAnchor[],
+  text: string,
+): void {
+  const lineOf = (offset: number) => text.lastIndexOf("\n", offset - 1) + 1;
+  for (let index = anchors.length - 1; index >= 0; index -= 1) {
+    const anchor = anchors[index];
+    if (anchor.placement) continue;
+    const line = lineOf(anchor.offset);
+    const inline = anchors.filter(
+      (other) =>
+        other.placement === "inline" &&
+        other.offset <= anchor.offset &&
+        lineOf(other.offset) === line,
+    );
+    if (!inline.length) continue;
+    anchor.sources = anchor.sources.filter((source) => {
+      const owner = inline.find((other) =>
+        other.sources.some((known) => known.sourceId === source.sourceId),
+      );
+      if (!owner) return true;
+      const phrase = anchor.phrases?.[source.sourceId];
+      if (phrase && !owner.phrases?.[source.sourceId])
+        owner.phrases = { ...owner.phrases, [source.sourceId]: phrase };
+      return false;
+    });
+    if (anchor.phrases) {
+      const kept = phrasesFor(
+        anchor.sources.map((source) => source.sourceId),
+        anchor.phrases,
+      );
+      if (kept) anchor.phrases = kept;
+      else delete anchor.phrases;
+    }
+    if (!anchor.sources.length) anchors.splice(index, 1);
+  }
 }
 
 /** Remove complete and still-streaming markers without touching code fences. */

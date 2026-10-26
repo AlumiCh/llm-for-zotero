@@ -552,9 +552,14 @@ describe("workflow: standalone side panel", function () {
       { present: true, active: true, title: "New tab", closeVisible: true },
       "the new-tab page is itself the active tab",
     );
-    assert.deepEqual(side.launchRows, ["sidechat", "history", "misc"]);
+    assert.deepEqual(side.launchRows, [
+      "sidechat",
+      "history",
+      "misc",
+      "progress",
+    ]);
     // The New tab page is the chat start page: its title and tagline, and
-    // the three rows (left-aligned together), centred in the panel.
+    // the four rows (left-aligned together), centred in the panel.
     const newTabStart = side.design.newTabPage;
     assert.isOk(newTabStart, JSON.stringify(side.design));
     assert.equal(newTabStart!.title, "LLM-for-Zotero");
@@ -562,9 +567,10 @@ describe("workflow: standalone side panel", function () {
     assert.equal(newTabStart!.subtitleFontStyle, "italic");
     assert.closeTo(newTabStart!.centreDxPx, 0, 1, "centred across");
     assert.closeTo(newTabStart!.centreDyPx, 0, 12, "centred down");
-    assert.lengthOf(newTabStart!.rowLefts, 3);
+    assert.lengthOf(newTabStart!.rowLefts, 4);
     assert.closeTo(newTabStart!.rowLefts[0], newTabStart!.rowLefts[1], 0.5);
     assert.closeTo(newTabStart!.rowLefts[0], newTabStart!.rowLefts[2], 0.5);
+    assert.closeTo(newTabStart!.rowLefts[0], newTabStart!.rowLefts[3], 0.5);
     const newTabTitle = side.design.startTitle!;
     assert.isNull(side.design.searchField, "no search field on New tab");
     assert.deepEqual(side.historyKeys, [], "no history list on New tab");
@@ -1237,6 +1243,57 @@ describe("workflow: standalone side panel", function () {
     );
     assert.equal(side.activeTab, askTab, "the same side chat, no new tab");
     assert.lengthOf(side.tabs, 2);
+  });
+
+  it("puts the New tab page's title on the main start page's title line", async function () {
+    const fixture = await api.createPaperWithPdfFixture({
+      title: "Side panel title line paper",
+      pdfTitle: "Side panel title line paper PDF",
+      pages: ["Side panel title line paper: one short page of text."],
+    });
+    fixtures.push(fixture);
+    await api.openStandaloneForItem(fixture.parentItemId);
+    await api.clickStandaloneTab("open");
+    // Earlier files leave messages in the default library chat; the start
+    // page needs an empty one.
+    await api.startNewStandaloneConversation();
+    await api.clickStandaloneSidePanelControl("toggle");
+    const aligned =(state: WorkflowTestStandaloneSidePanelDiagnostics) => {
+      const page = state.design.newTabPage;
+      return Boolean(
+        page &&
+        page.mainTitleTopPx !== null &&
+        Math.abs(page.titleTopPx - page.mainTitleTopPx) <= 0.5,
+      );
+    };
+    let side = await waitForSide(aligned, "library chat start page");
+    assertOnMainTitleLine(side.design.newTabPage, "library chat");
+
+    // A shorter window moves the main title; the side title follows.
+    const win = standaloneWin()!;
+    await api.resizeStandaloneWindow(win.innerWidth, win.innerHeight - 160);
+    side = await waitForSide(aligned, "shorter window");
+    assertOnMainTitleLine(side.design.newTabPage, "shorter window");
+
+    // With a chat in the main column there is no main title: the page
+    // centres in its column.
+    await api.seedStandaloneConversation([
+      { role: "user", text: "title-line-question" },
+      { role: "assistant", text: "title-line-answer" },
+    ]);
+    side = await waitForSide(
+      (state) => state.design.newTabPage?.mainTitleTopPx === null,
+      "main chat shows messages",
+    );
+    side = await waitForSide(
+      (state) => Math.abs(state.design.newTabPage?.centreDyPx ?? 99) <= 12,
+      "the page centres without a main title",
+    );
+
+    // A new main chat brings the start page, and the title line, back.
+    await api.startNewStandaloneConversation();
+    side = await waitForSide(aligned, "new main chat");
+    assertOnMainTitleLine(side.design.newTabPage, "new main chat");
   });
 
   it("keeps the window in place when the screen has little room on the right", async function () {

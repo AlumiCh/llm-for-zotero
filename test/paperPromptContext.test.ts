@@ -259,4 +259,13 @@ describe("default paper prompt context", function () {
     assert.include(prepared.blocks[0], "[no passage ID]");
     assert.notInclude(prepared.blocks[0], "Chunk numbers");
   });
+
+  it("names passage IDs for sentence citations", async function () {
+    const prepared = await preparePaperPromptContext(request(), {
+      tokenBudget: 5000,
+      load: async () => context,
+    });
+    assert.include(prepared.blocks[0], "[[cite:ID]] sentence citations");
+    assert.notInclude(prepared.blocks[0], "paragraph citations");
+  });
 });

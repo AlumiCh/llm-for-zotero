@@ -75,7 +75,8 @@
   resize: none;
 }
 
-.llm-panel {
+.llm-panel,
+.llm-standalone-side-panel-task-progress {
   /*
    * Zotero windows are chrome documents, whose used user-select value roots
    * at `none` — so every hint, status, and message the plugin renders is
@@ -282,7 +283,10 @@
 :root[sizemode][lwtheme-brighttext] .llm-panel,
 .window-is-dark .llm-standalone-side-panel-item-rendered,
 :root[lwtheme-brighttext] .llm-standalone-side-panel-item-rendered,
-:root[sizemode][lwtheme-brighttext] .llm-standalone-side-panel-item-rendered {
+:root[sizemode][lwtheme-brighttext] .llm-standalone-side-panel-item-rendered,
+.window-is-dark .llm-standalone-side-panel-task-progress,
+:root[lwtheme-brighttext] .llm-standalone-side-panel-task-progress,
+:root[sizemode][lwtheme-brighttext] .llm-standalone-side-panel-task-progress {
   --llm-codeblock-bg: #202020;
   --llm-codeblock-border: color-mix(in srgb, #fff 8%, transparent);
   --llm-flat-surface: color-mix(in srgb, #fff 4.5%, transparent);
@@ -4228,6 +4232,9 @@
     var(--material-sidepane) 96%,
     black 4%
   );
+  /* Task progress cards (In your library, Web, ...) take the main chat's
+   * own white surface, set here before the side panel darkens its own. */
+  --llm-task-card-bg: var(--material-sidepane);
 }
 
 .llm-standalone-content-wrapper {
@@ -4623,6 +4630,11 @@
   border: none;
   border-radius: 0;
   padding: 12px;
+  /* Room under the last message for the floating chips and composer. */
+  padding-bottom: calc(12px + var(--llm-chat-floor, 0px));
+  /* What the chat scrolls into view ("Show in answer") lands above them. */
+  scroll-padding-top: 12px;
+  scroll-padding-bottom: calc(12px + var(--llm-chat-floor, 0px));
   background: transparent;
   display: flex;
   flex-direction: column;
@@ -4681,6 +4693,12 @@
 
 .llm-chat-latest[hidden] {
   display: none;
+}
+
+/* On words lit by "Show in answer": out of their way until they scroll on. */
+.llm-chat-latest[data-aside="true"] {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .llm-chat-latest:hover {
@@ -9635,7 +9653,8 @@ label.llm-search-results-item:hover {
    panel never shows the light wash under the panel's own light text. Both
    hooks carry the same values; whichever the running window offers wins. */
 @media (prefers-color-scheme: dark) {
-  .llm-panel {
+  .llm-panel,
+  .llm-standalone-side-panel-task-progress {
     --llm-diff-add-bg: rgba(63, 185, 110, 0.13);
     --llm-diff-add-strong: rgba(63, 185, 110, 0.36);
     --llm-diff-add-fg: #5fcf8a;
@@ -10618,6 +10637,20 @@ label.llm-search-results-item:hover {
   max-height: 420px;
 }
 
+/* A drawing with its own fixed colours was made for a white page: it sits on
+ * a white card in every theme, framed like the web page below
+ * (previewTheme.ts decides which drawings are "paper"). */
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-svg-preview[data-llm-preview-surface="paper"] {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 75%, transparent);
+  border-radius: 10px;
+  background: #ffffff;
+  color-scheme: light;
+}
+
 /* Web page: the top of the page in a 300px frame; a pill shows all of it. */
 .llm-content-flat
   .llm-copyable-flat-preview
@@ -10628,6 +10661,16 @@ label.llm-search-results-item:hover {
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--stroke-secondary) 75%, transparent);
   border-radius: 10px;
+}
+
+/* A page with its own fixed colours: a white card; the fold fades to white. */
+.llm-content-flat
+  .llm-copyable-flat-preview
+  .llm-codeblock-flat-preview
+  > .llm-html-preview[data-llm-preview-surface="paper"] {
+  --llm-mermaid-canvas-bg: #ffffff;
+  background: #ffffff;
+  color-scheme: light;
 }
 
 .llm-content-flat
@@ -10891,6 +10934,14 @@ label.llm-search-results-item:hover {
   width: 100%;
   height: 320px;
   border: 0;
+}
+
+/* A drawing or page with its own fixed colours was made for a white page: the
+ * card turns white in every theme (previewTheme.ts). */
+.llm-rendered-markdown .llm-svg-preview[data-llm-preview-surface="paper"],
+.llm-rendered-markdown .llm-html-preview[data-llm-preview-surface="paper"] {
+  --llm-mermaid-canvas-bg: #ffffff;
+  color-scheme: light;
 }
 
 .llm-html-preview-stopped {
@@ -11259,6 +11310,11 @@ label.llm-search-results-item:hover {
   height: 100%;
   border: 0;
   background: #ffffff;
+}
+
+/* A page drawn with the theme colours shows the window's surface through. */
+.llm-viewer-window-frame[data-llm-preview-surface="themed"] {
+  background: transparent;
 }
 
 .llm-mermaid-window-root.llm-viewer-window-html {
@@ -17596,12 +17652,7 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
     var(--llm-task-progress-curtain-ease);
 }
 
-/* Paragraph evidence uses the shared source footer and its accessible popover. */
-.llm-paper-source-icon {
-  width: 1em;
-  height: 1em;
-  color: inherit;
-}
+/* A cited sentence's mark uses the shared source chip and its accessible popover. */
 .llm-paper-source-count {
   font-size: inherit;
   font-variant-numeric: tabular-nums;
@@ -17683,6 +17734,10 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 }
 .llm-paper-source-indicator .llm-web-source-chip:focus-visible {
   outline-color: currentColor;
+}
+/* A cited sentence's mark shows its passage numbers. */
+.llm-paper-cite-mark .llm-web-source-chip {
+  min-width: 1.4em;
 }
 
 /* The header: status ring, label, counts, status pill, chevron. */
@@ -17767,20 +17822,38 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 
 .llm-task-progress[data-state="working"] .llm-task-progress-ring-arc,
 .llm-task-progress[data-state="answering"] .llm-task-progress-ring-arc,
-.llm-task-progress[data-state="waiting"] .llm-task-progress-ring-arc {
+.llm-task-progress[data-state="waiting"] .llm-task-progress-ring-arc,
+.llm-task-progress-dock-question[data-state="working"]
+  .llm-task-progress-ring-arc,
+.llm-task-progress-dock-question[data-state="answering"]
+  .llm-task-progress-ring-arc,
+.llm-task-progress-dock-question[data-state="waiting"]
+  .llm-task-progress-ring-arc {
   display: inline;
 }
 
 .llm-task-progress[data-state="working"] .llm-task-progress-ring-track,
 .llm-task-progress[data-state="answering"] .llm-task-progress-ring-track,
-.llm-task-progress[data-state="waiting"] .llm-task-progress-ring-track {
+.llm-task-progress[data-state="waiting"] .llm-task-progress-ring-track,
+.llm-task-progress-dock-question[data-state="working"]
+  .llm-task-progress-ring-track,
+.llm-task-progress-dock-question[data-state="answering"]
+  .llm-task-progress-ring-track,
+.llm-task-progress-dock-question[data-state="waiting"]
+  .llm-task-progress-ring-track {
   animation: llm-plan-progress-spin 1.1s linear infinite;
   animation-delay: var(--llm-stable-animation-delay, 0ms);
 }
 
 .llm-task-progress[data-state="cancelled"] .llm-task-progress-ring-base,
 .llm-task-progress[data-state="interrupted"] .llm-task-progress-ring-base,
-.llm-task-progress[data-state="blocked"] .llm-task-progress-ring-base {
+.llm-task-progress[data-state="blocked"] .llm-task-progress-ring-base,
+.llm-task-progress-dock-question[data-state="cancelled"]
+  .llm-task-progress-ring-base,
+.llm-task-progress-dock-question[data-state="interrupted"]
+  .llm-task-progress-ring-base,
+.llm-task-progress-dock-question[data-state="blocked"]
+  .llm-task-progress-ring-base {
   stroke-dasharray: 3 3;
 }
 
@@ -17805,7 +17878,13 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 .llm-task-progress[data-state="completed"] .llm-task-progress-badge-done,
 .llm-task-progress[data-state="completed_with_exceptions"]
   .llm-task-progress-badge-done,
-.llm-task-progress[data-state="failed"] .llm-task-progress-badge-failed {
+.llm-task-progress[data-state="failed"] .llm-task-progress-badge-failed,
+.llm-task-progress-dock-question[data-state="completed"]
+  .llm-task-progress-badge-done,
+.llm-task-progress-dock-question[data-state="completed_with_exceptions"]
+  .llm-task-progress-badge-done,
+.llm-task-progress-dock-question[data-state="failed"]
+  .llm-task-progress-badge-failed {
   display: inline-flex;
   animation: llm-task-progress-pop 300ms var(--llm-task-progress-ease) both;
 }
@@ -17813,7 +17892,13 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 .llm-task-progress[data-state="completed"] .llm-task-progress-ring-track,
 .llm-task-progress[data-state="completed_with_exceptions"]
   .llm-task-progress-ring-track,
-.llm-task-progress[data-state="failed"] .llm-task-progress-ring-track {
+.llm-task-progress[data-state="failed"] .llm-task-progress-ring-track,
+.llm-task-progress-dock-question[data-state="completed"]
+  .llm-task-progress-ring-track,
+.llm-task-progress-dock-question[data-state="completed_with_exceptions"]
+  .llm-task-progress-ring-track,
+.llm-task-progress-dock-question[data-state="failed"]
+  .llm-task-progress-ring-track {
   display: none;
 }
 
@@ -17931,6 +18016,19 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 .llm-panel:not([data-standalone="true"])
   .llm-chat-shell.llm-task-progress-present[data-task-progress-curtain="open"] {
   margin-top: -8px;
+}
+
+/* In the standalone window the row lines up with the History pane's second
+   row (Search history), as the title row does with New chat: the card's
+   header sits on that row's 38px band, its border just outside. The
+   chat runs 7px up under the title row and the panel pads 5px, so the
+   card would start 2px above the title row's lower edge; 3px more puts
+   its border 1px below that edge. */
+[data-standalone="true"]
+  .llm-chat-shell.llm-task-progress-present[data-task-progress-curtain="opening"],
+[data-standalone="true"]
+  .llm-chat-shell.llm-task-progress-present[data-task-progress-curtain="open"] {
+  margin-top: 3px;
 }
 
 :root:not([data-llm-pane-view="stacked"])
@@ -18075,7 +18173,18 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   font-size: var(--llm-fs-11);
 }
 
+.llm-task-progress-quiet {
+  padding: 2px 14px 8px;
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-12);
+}
+
+.llm-task-progress-question-body .llm-task-progress-quiet {
+  padding: 2px 0 4px;
+}
+
 .llm-task-progress-note[hidden],
+.llm-task-progress-quiet[hidden],
 .llm-task-progress-steps[hidden],
 .llm-task-progress-papers-title[hidden],
 .llm-task-progress-more[hidden],
@@ -18241,9 +18350,9 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   text-align: right;
 }
 
-/* The paper's status ring: empty when only listed, outlined when matched,
-   half-filled when skimmed, filled with a check once read, and in the cite
-   colour once the answer cites it. */
+/* The paper's status ring says one thing: whether the agent opened the
+   paper. Empty until then (a search hit says "found" in words), then the
+   green check a finished step uses. Being cited is the "Cited" tag. */
 .llm-task-paper-dot {
   position: relative;
   grid-row: 1;
@@ -18255,25 +18364,14 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   border-radius: 50%;
 }
 
-.llm-task-paper[data-state="matched"] .llm-task-paper-dot {
-  border-color: var(--fill-secondary);
-}
-
-.llm-task-paper[data-state="skimmed"] .llm-task-paper-dot {
-  border-color: var(--color-accent);
-  background: linear-gradient(90deg, var(--color-accent) 50%, transparent 50%);
-}
-
+.llm-task-paper[data-state="skimmed"] .llm-task-paper-dot,
 .llm-task-paper[data-state="read"] .llm-task-paper-dot,
 .llm-task-paper[data-state="cited"] .llm-task-paper-dot {
   border: 0;
-  background: var(--color-accent);
+  background: var(--llm-diff-add-fg);
 }
 
-.llm-task-paper[data-state="cited"] .llm-task-paper-dot {
-  background: var(--llm-context-icon-note-color);
-}
-
+.llm-task-paper[data-state="skimmed"] .llm-task-paper-dot::after,
 .llm-task-paper[data-state="read"] .llm-task-paper-dot::after,
 .llm-task-paper[data-state="cited"] .llm-task-paper-dot::after {
   position: absolute;
@@ -18314,6 +18412,34 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   white-space: nowrap;
 }
 
+.llm-task-paper-name {
+  display: flex;
+  grid-row: 1;
+  grid-column: 3;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.llm-task-paper-name > .llm-task-paper-title {
+  flex: 0 1 auto;
+}
+
+.llm-task-paper-cite {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-accent);
+  font-size: var(--llm-fs-10);
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.llm-task-paper-cite[hidden] {
+  display: none;
+}
+
 .llm-task-paper-tail {
   grid-row: 1;
   grid-column: 4;
@@ -18325,15 +18451,12 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   white-space: nowrap;
 }
 
-/* The paper's details line shows once the row is opened. */
-.llm-task-paper-summary:not([aria-expanded="true"]) .llm-task-paper-meta {
-  display: none;
-}
-
+/* The paper's details line sits under its title, past its icon. */
 .llm-task-paper-meta {
   grid-row: 2;
   grid-column: 3 / 6;
   min-width: 0;
+  padding-inline-start: 22px;
   overflow: hidden;
   color: var(--fill-tertiary);
   font-size: var(--llm-fs-10);
@@ -18351,12 +18474,13 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 }
 
 /* A paper's reads unroll under it along a thin guide line, one after
-   another. */
+   another. A long unbroken word (a URL in a passage) wraps too. */
 .llm-task-paper-details {
   margin: 0 14px 10px 18px;
   padding: 0 0 2px 12px;
   border-left: 1px solid var(--llm-popup-surface-border);
   font-size: var(--llm-fs-12);
+  overflow-wrap: anywhere;
   animation: llm-task-progress-fade 300ms
     var(--llm-task-progress-ease, ease-out) both;
 }
@@ -18383,9 +18507,11 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   font-style: italic;
 }
 
+/* A part's heading in an open row ("Cited", "Question 2"): the main text
+   colour, so each part is easy to find. */
 .llm-task-paper-turn {
   margin: 6px 0 4px;
-  color: var(--fill-tertiary);
+  color: var(--fill-primary);
   font-size: var(--llm-fs-10);
   letter-spacing: 0.3px;
   text-transform: uppercase;
@@ -18410,6 +18536,18 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 .llm-task-paper-read-head > .llm-task-paper-how {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* A web or scholarly quote's label ("In the answer · section") stays on one
+   line. */
+.llm-task-source-quote .llm-task-paper-read-head > .llm-task-paper-how {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-task-paper-read-head > .llm-task-source-link {
+  flex: 0 0 auto;
 }
 
 .llm-task-paper-open {
@@ -18455,6 +18593,50 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   flex-direction: column;
   align-items: flex-start;
   margin-top: 6px;
+}
+
+/* "Cited": "Show in answer" under the passage's box, at the right. */
+.llm-task-cited-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 3px;
+}
+
+/* The passage's number: the number its mark shows in the answer. */
+.llm-task-cited-number {
+  display: inline-grid;
+  place-items: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  margin-right: 5px;
+  box-sizing: border-box;
+  border: 1px solid var(--fill-quarternary);
+  border-radius: 999px;
+  font-size: var(--llm-fs-10);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--fill-secondary);
+}
+
+/* A sentence that names the paper without citing a passage of it. */
+.llm-task-cited-named .llm-task-paper-snippet {
+  font-style: italic;
+  color: var(--fill-secondary);
+}
+
+/* "Read, not cited (n)": the reads the answer did not cite, folded. */
+.llm-task-cited-fold {
+  margin-top: 2px;
+}
+
+.llm-task-cited-fold-body {
+  margin-top: 6px;
+}
+
+/* Paper chat: the chat's own paper's "Cited" card. */
+.llm-task-cited-list {
+  padding-top: 4px;
 }
 
 /* A quote may wrap: Zotero's macOS window caps every button at 25px, so the
@@ -18883,6 +19065,12 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   margin: 0 auto;
 }
 
+/* A saved drawing was made for a white page. */
+.llm-saved-file-image[data-llm-image-kind="svg"],
+.llm-saved-file-preview-image[data-llm-image-kind="svg"] {
+  background: #ffffff;
+}
+
 /* "Move to side panel" (standalone window only; the renderers add the
  * button only where the document has a side panel). */
 .llm-side-move-glyph::before {
@@ -19308,6 +19496,312 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z'/%3E%3Crect x='3' y='14' width='7' height='7' rx='1'/%3E%3Ccircle cx='17.5' cy='17.5' r='3.5'/%3E%3C/svg%3E");
 }
 
+/* Task progress tab (side panel): the title bar's Task progress icon, as the
+ * New tab row's icon and the tab's icon. On the tab it follows the run: a
+ * spinning arc while the agent works, green once done, red if it failed. */
+.llm-standalone-side-panel-icon-task-progress::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8.5 12.5l2.5 2.5 4.5-5'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8.5 12.5l2.5 2.5 4.5-5'/%3E%3C/svg%3E");
+}
+
+.llm-standalone-side-panel-tab-icon.llm-standalone-side-panel-icon-task-progress:is(
+    [data-task-state="working"],
+    [data-task-state="answering"],
+    [data-task-state="waiting"]
+  )::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9' stroke-opacity='0.35'/%3E%3Cpath d='M12 3a9 9 0 0 1 9 9'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9' stroke-opacity='0.35'/%3E%3Cpath d='M12 3a9 9 0 0 1 9 9'/%3E%3C/svg%3E");
+  animation: llm-plan-progress-spin 1.1s linear infinite;
+}
+
+.llm-standalone-side-panel-tab-icon.llm-standalone-side-panel-icon-task-progress:is(
+    [data-task-state="completed"],
+    [data-task-state="completed_with_exceptions"]
+  ) {
+  color: var(--llm-diff-add-fg);
+}
+
+.llm-standalone-side-panel-tab-icon.llm-standalone-side-panel-icon-task-progress[data-task-state="failed"]::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M15 9l-6 6M9 9l6 6'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M15 9l-6 6M9 9l6 6'/%3E%3C/svg%3E");
+}
+
+.llm-standalone-side-panel-tab-icon.llm-standalone-side-panel-icon-task-progress[data-task-state="failed"] {
+  color: var(--llm-diff-remove-fg);
+}
+
+/* The row's →| button (the chat's card, standalone window only) and, in the
+ * tab, the |← button that puts the row back in the chat. They sit at the
+ * row's end, after its chevron. */
+.llm-task-progress-card[data-movable="true"] > .llm-task-progress {
+  padding-right: 38px;
+}
+
+.llm-task-progress-move {
+  appearance: none;
+  -moz-appearance: none;
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fill-tertiary);
+  cursor: pointer;
+}
+
+.llm-task-progress-move::before {
+  content: "";
+  display: block;
+  width: 15px;
+  height: 15px;
+  background-color: currentColor;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12h13M11 6l6 6-6 6M21 5v14'/%3E%3C/svg%3E");
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+}
+
+.llm-task-progress-back::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12H8M13 6l-6 6 6 6M3 5v14'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12H8M13 6l-6 6 6 6M3 5v14'/%3E%3C/svg%3E");
+}
+
+/* In the chat, the card spans the chat and composer's width, and its
+ * chevron and →| sit in the title row's Export and Clear columns. Those
+ * buttons are 24px + the chrome gap wide, half a gap apart, and end 10px
+ * in from the title row's edge, 13px past the card's inner edge. */
+.llm-task-progress-card[data-movable="true"]:not(.llm-task-progress-docked) {
+  margin-inline: 0;
+}
+
+.llm-task-progress-card[data-movable="true"]:not(.llm-task-progress-docked)
+  > .llm-task-progress {
+  padding-right: calc(21px + 2 * var(--llm-standalone-chrome-gap));
+}
+
+.llm-task-progress-card[data-movable="true"]:not(.llm-task-progress-docked)
+  > .llm-task-progress-move {
+  right: 1px;
+  width: calc(16px + var(--llm-standalone-chrome-gap));
+  min-width: calc(16px + var(--llm-standalone-chrome-gap));
+}
+
+.llm-task-progress-move:hover,
+.llm-task-progress-move:focus-visible {
+  background: color-mix(in srgb, var(--fill-primary) 9%, transparent);
+  color: var(--fill-primary);
+}
+
+.llm-task-progress-move:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 0;
+}
+
+/* The tab: the chat's card, flat (no border, shadow or rounded box). Its row
+ * is the tab's title ("Task progress" and |←, as Miscellaneous names its
+ * list); its drawer is always open and fills the tab. The tokens and font
+ * scale come from the .llm-panel blocks above (the tab is outside the chat
+ * panel). Its title row starts at the view's top, so it sits on the main
+ * title row's line, centred on the chat's title buttons, and the questions
+ * start where the main title row ends. */
+.llm-standalone-side-panel-task-progress {
+  flex: 1 1 auto;
+  gap: 0;
+  height: auto;
+  padding: 0 6px;
+  background: transparent;
+}
+
+.llm-task-progress-card.llm-task-progress-docked {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.llm-task-progress-docked > .llm-task-progress {
+  padding-left: 12px;
+  cursor: default;
+}
+
+.llm-task-progress-docked > .llm-task-progress:hover,
+.llm-task-progress-docked > .llm-task-progress:focus-visible {
+  background: transparent;
+}
+
+.llm-task-progress-docked > .llm-task-progress .llm-task-progress-label {
+  font-size: var(--llm-fs-14);
+}
+
+.llm-task-progress-docked > .llm-task-progress > .llm-task-progress-ring,
+.llm-task-progress-docked > .llm-task-progress .llm-task-progress-count,
+.llm-task-progress-docked > .llm-task-progress .llm-task-progress-pill,
+.llm-task-progress-docked .llm-task-progress-chevron,
+.llm-task-progress-docked .llm-task-progress-drawer-grip {
+  display: none;
+}
+
+.llm-task-progress-docked > .llm-task-progress-drawer {
+  flex: 1 1 auto;
+  max-height: none;
+  border-top: 0;
+}
+
+.llm-task-progress-docked .llm-task-progress-drawer-body {
+  flex: 1 1 auto;
+  padding-top: 0;
+}
+
+/* One block per question, newest first: ring | words (two lines at most) |
+ * chevron, and a line under the words naming the question, how it stands
+ * and its counts. Its steps and papers line up under the words. No boxes:
+ * only a hover tint. */
+.llm-task-progress-dock-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+}
+
+/* Zotero's main window caps every button at 25px: the header takes back its
+ * height, or its second line and meta draw over the question's body. */
+.llm-task-progress-dock-question {
+  appearance: none;
+  -moz-appearance: none;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fill-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The grid lives on an inner span (Gecko lays a button's children out in an
+ * anonymous block). The ring and chevron sit centred on the words' first
+ * line. */
+.llm-task-progress-dock-question-grid {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 16px;
+  column-gap: 10px;
+  align-items: start;
+  line-height: 1.4;
+}
+
+.llm-task-progress-dock-question-grid > .llm-task-progress-ring {
+  margin-top: calc(0.7em - 10px);
+}
+
+.llm-task-progress-dock-question:hover {
+  background: color-mix(in srgb, var(--fill-primary) 5%, transparent);
+}
+
+.llm-task-progress-dock-question:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.llm-task-progress-dock-question-words {
+  display: -webkit-box;
+  overflow: hidden;
+  font-weight: 600;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.llm-task-progress-dock-question-grid > .llm-task-paper-chevron {
+  margin-top: calc(0.7em - 7px);
+}
+
+.llm-task-progress-dock-question[aria-expanded="true"]
+  .llm-task-progress-dock-question-grid
+  > .llm-task-paper-chevron
+  svg {
+  transform: rotate(180deg);
+}
+
+.llm-task-progress-dock-question-meta {
+  grid-column: 2 / 4;
+  margin-top: 2px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+.llm-task-progress-dock-question-meta > span:empty {
+  display: none;
+}
+
+.llm-task-progress-dock-question-meta
+  > span:not(:empty)
+  ~ span:not(:empty)::before {
+  content: " · ";
+  color: var(--fill-tertiary);
+}
+
+.llm-task-progress-dock-question-status[data-tone="completed"],
+.llm-task-progress-dock-question-status[data-tone="completed_with_exceptions"] {
+  color: var(--llm-diff-add-fg);
+}
+
+.llm-task-progress-dock-question-status[data-tone="failed"] {
+  color: var(--llm-diff-remove-fg);
+}
+
+.llm-task-progress-history.llm-task-progress-dock-questions,
+.llm-task-progress-dock-questions
+  > .llm-task-progress-question-section
+  + .llm-task-progress-question-section {
+  border-top: 0;
+}
+
+.llm-task-progress-dock-question-meta .llm-task-progress-question-counts {
+  margin-left: 0;
+}
+
+.llm-task-progress-dock-questions .llm-task-progress-question-body {
+  padding: 0 8px 8px 38px;
+}
+
+.llm-task-progress-dock-questions .llm-task-progress-steps {
+  margin: 4px 0 6px;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.llm-task-progress-dock-questions .llm-task-progress-papers-title {
+  padding: 6px 0 4px;
+}
+
 .llm-standalone-side-panel-misc {
   display: flex;
   flex-direction: column;
@@ -19560,9 +20054,7 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   line-height: 1.35;
 }
 
-/* Web sources tab (side panel): globe icon, as the New tab row's icon, the
- * tab's icon, and the "Open in default browser" button. */
-.llm-standalone-side-panel-icon-web-sources::before,
+/* Globe icon: "Open in default browser" on a source's page. */
 .llm-standalone-side-panel-icon-web-browser::before {
   mask-image: url("icons/action-mode-global.svg");
   -webkit-mask-image: url("icons/action-mode-global.svg");
@@ -19588,165 +20080,13 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   display: none;
 }
 
-/* The list reuses the History rows (.llm-standalone-search-*), flat on the
- * panel as in Miscellaneous. */
-.llm-web-sources-list.llm-standalone-search-results {
-  flex: 1 1 auto;
-  min-height: 0;
-  background: transparent;
-  padding: 0 8px 12px;
-}
-
-.llm-web-sources-row.llm-standalone-search-item {
-  flex-direction: row;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.llm-web-sources-row-highlighted.llm-standalone-search-item {
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-}
-
-.llm-web-sources-number {
-  flex: 0 0 14px;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-10);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-  line-height: 18px;
-}
-
-.llm-web-sources-site-icon {
-  position: relative;
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
-  margin-top: 1px;
-  border-radius: 3px;
-  color: var(--fill-tertiary);
-}
-
-.llm-web-sources-site-icon::before {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  background: currentColor;
-  mask: url("icons/action-mode-global.svg") center / contain no-repeat;
-  -webkit-mask: url("icons/action-mode-global.svg") center / contain no-repeat;
-}
-
-.llm-web-sources-site-icon.llm-web-sources-site-icon-has-favicon::before {
-  display: none;
-}
-
-.llm-web-sources-favicon {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 3px;
-  object-fit: contain;
-}
-
-.llm-web-sources-favicon[hidden] {
-  display: none;
-}
-
-.llm-web-sources-row-main {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.llm-web-sources-row-main .llm-standalone-search-title {
-  flex: 0 1 auto;
-}
-
-/* "Cited": the Task progress paper tag. */
-.llm-web-sources-cited {
-  flex: 0 0 auto;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
-  color: var(--color-accent);
-  font-size: var(--llm-fs-10);
-  font-weight: 600;
-  line-height: 16px;
-}
-
-/* Opened or not: the Task progress paper sign (empty ring, or the green
- * check), with "found" for a page seen only in search results. */
-.llm-web-sources-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  color: var(--fill-tertiary);
-  font-size: var(--llm-fs-10);
-  line-height: 18px;
-}
-
-.llm-web-sources-sign {
-  position: relative;
-  box-sizing: border-box;
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--llm-popup-surface-border);
-  border-radius: 50%;
-}
-
-.llm-web-sources-state[data-read="true"] .llm-web-sources-sign {
-  border: 0;
-  background: var(--llm-diff-add-fg);
-}
-
-.llm-web-sources-state[data-read="true"] .llm-web-sources-sign::after {
-  position: absolute;
-  top: 2.5px;
-  left: 4.8px;
-  width: 3px;
-  height: 6px;
-  border: solid var(--material-sidepane, var(--material-background));
-  border-width: 0 1.6px 1.6px 0;
-  transform: rotate(45deg);
-  content: "";
-}
-
-/* Copy link | Open in default browser: in place of the sign while the
- * pointer is on the row. */
-.llm-web-sources-row-actions {
-  display: none;
-  align-items: center;
-  gap: 2px;
-  flex: 0 0 auto;
-  margin: -2px -2px -2px 0;
-}
-
-.llm-web-sources-row:hover .llm-web-sources-row-actions,
-.llm-web-sources-row:focus-within .llm-web-sources-row-actions {
-  display: inline-flex;
-}
-
-.llm-web-sources-row:hover .llm-web-sources-state,
-.llm-web-sources-row:focus-within .llm-web-sources-state {
-  display: none;
-}
-
-.llm-web-sources-row-actions .llm-standalone-title-action {
-  width: 22px;
-  min-width: 22px;
-  height: 22px;
-}
-
 /* "Page | What the agent read": flat text tabs, an underline on the chosen
  * one, lined up with the title text. */
 .llm-web-sources-modes {
   display: flex;
   gap: 16px;
   flex: 0 0 auto;
-  /* webSourcesTab.ts lines the tabs up with the title text. */
+  /* sourcePageView.ts lines the tabs up with the title text. */
   padding: 0 12px 0 16px;
 }
 
@@ -19789,8 +20129,7 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
 }
 
 .llm-web-sources-page[hidden],
-.llm-web-sources-text[hidden],
-.llm-web-sources-list[hidden] {
+.llm-web-sources-text[hidden] {
   display: none;
 }
 
@@ -19849,96 +20188,705 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   display: none !important;
 }
 
-/* One block per question, newest first, as in the docked Task progress:
- * icon | question (two lines at most) | chevron, and a line under the words
- * naming the question and its counts. No boxes: only a hover tint. */
-.llm-web-sources-question + .llm-web-sources-question {
-  margin-top: 2px;
+/* ---------- Task progress: a question's sources in groups ----------
+ * From earlier questions, In your library, Scholarly search, Web
+ * (taskProgress/outsideView.ts). Each row carries its site's icon: the
+ * favicon, a page for a paper (or a library paper), the globe for a web
+ * page without one. */
+.llm-task-source-icon {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-block;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--fill-primary) 10%, transparent);
+  color: var(--fill-secondary);
+  overflow: hidden;
 }
 
-.llm-web-sources-question-head {
+.llm-task-source-icon::before {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5M9 13h6M9 17h4'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5M9 13h6M9 17h4'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.llm-task-source-icon-web::before {
+  mask-image: url("icons/action-mode-global.svg");
+  -webkit-mask-image: url("icons/action-mode-global.svg");
+}
+
+.llm-task-source-icon-has-favicon {
+  background: #fff;
+}
+
+.llm-task-source-icon-has-favicon::before {
+  display: none;
+}
+
+.llm-task-source-favicon {
+  position: absolute;
+  inset: 1px;
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+  object-fit: contain;
+}
+
+.llm-task-source-question {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fill-primary) 8%, transparent);
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-10);
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+/* The rows a marker asked for. */
+.llm-task-source-highlighted > .llm-task-paper-summary,
+.llm-task-source-highlighted > .llm-task-paper-summary:hover {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+/* Copy link and open in the browser: shown on the row's hover or focus,
+ * where its "found" or "skimmed" was. */
+.llm-task-source-actions {
+  position: absolute;
+  top: calc(9px + var(--llm-fs-12) * 0.675 - 11px);
+  right: 30px;
+  display: none;
+  gap: 2px;
+}
+
+.llm-task-source-has-actions:hover > .llm-task-source-actions,
+.llm-task-source-has-actions:focus-within > .llm-task-source-actions {
+  display: inline-flex;
+}
+
+.llm-task-source-has-actions:hover .llm-task-paper-tail,
+.llm-task-source-has-actions:focus-within .llm-task-paper-tail {
+  visibility: hidden;
+}
+
+.llm-task-source-action {
   appearance: none;
-  -moz-appearance: none;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 16px;
-  column-gap: 10px;
-  align-items: start;
+  position: relative;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fill-secondary);
+  cursor: pointer;
+}
+
+.llm-task-source-action::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='9' width='11' height='11' rx='2'/%3E%3Cpath d='M5 15V5a1 1 0 0 1 1-1h10'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='9' y='9' width='11' height='11' rx='2'/%3E%3Cpath d='M5 15V5a1 1 0 0 1 1-1h10'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.llm-task-source-action-browser::before {
+  mask-image: url("icons/action-mode-global.svg");
+  -webkit-mask-image: url("icons/action-mode-global.svg");
+}
+
+.llm-task-source-action:hover,
+.llm-task-source-action:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--fill-primary) 8%, transparent);
+  color: var(--fill-primary);
+}
+
+.llm-task-group-before[hidden],
+.llm-task-group-after[hidden] {
+  display: none;
+}
+
+.llm-task-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px 4px;
+}
+
+.llm-task-progress-question-body .llm-task-group-title,
+.llm-task-progress-dock-questions .llm-task-group-title {
+  padding: 10px 0 4px;
+}
+
+.llm-task-group-count {
+  color: var(--fill-tertiary);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.llm-task-group-why,
+.llm-task-group-note,
+.llm-task-group-empty {
+  padding: 0 14px 4px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11);
+  line-height: 1.4;
+}
+
+.llm-task-group-note {
+  color: var(--fill-secondary);
+}
+
+.llm-task-group-why b {
+  color: var(--fill-secondary);
+  font-weight: 600;
+}
+
+.llm-task-progress-question-body
+  :is(.llm-task-group-why, .llm-task-group-note, .llm-task-group-empty),
+.llm-task-progress-dock-questions
+  :is(.llm-task-group-why, .llm-task-group-note, .llm-task-group-empty) {
+  padding-inline: 0;
+}
+
+.llm-task-group-offer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px 4px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11);
+}
+
+.llm-task-progress-question-body .llm-task-group-offer,
+.llm-task-progress-dock-questions .llm-task-group-offer {
+  padding-inline: 0;
+}
+
+.llm-task-group-offer-button {
+  appearance: none;
+  min-height: 0;
+  margin: 0;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--fill-primary) 10%, transparent);
+  color: var(--fill-primary);
+  font: inherit;
+  font-size: var(--llm-fs-11);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.llm-task-group-offer-button:hover,
+.llm-task-group-offer-button:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--fill-primary) 16%, transparent);
+}
+
+/* Markers: a paper without an icon shows a page; a marker inside a
+ * sentence sits close to the words it follows. */
+.llm-web-source-marker-icon-paper::before,
+.llm-web-source-site-icon-paper::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5M9 13h6M9 17h4'/%3E%3C/svg%3E");
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/%3E%3Cpath d='M14 3v5h5M9 13h6M9 17h4'/%3E%3C/svg%3E");
+}
+
+.llm-web-source-indicator-inline {
+  margin-inline-start: 2px;
+}
+
+/* The marker card's row: how far the agent got with the source. */
+.llm-web-source-row:has(.llm-web-source-state) {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+}
+
+.llm-web-source-state {
+  align-self: center;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-10);
+  white-space: nowrap;
+}
+
+/* "Show in answer": the marker flashes where the chat scrolled to. */
+.llm-web-source-indicator.llm-web-source-flash .llm-web-source-chip {
+  animation: llm-web-source-flash 1.4s ease-out;
+}
+
+@keyframes llm-web-source-flash {
+  0%,
+  40% {
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--color-accent) 70%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+
+.llm-citation-row.llm-web-source-flash,
+.llm-citation-inline-wrap.llm-web-source-flash {
+  border-radius: 4px;
+  animation: llm-web-source-flash 1.4s ease-out;
+}
+
+/* A source's page in Task progress: its name over a grey line naming where
+ * it came from (Scholarly search | Web · site · Question N). */
+.llm-source-page-name {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 1px;
+}
+
+.llm-source-page-name > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-source-page-sub {
+  overflow: hidden;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11);
+  font-weight: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-source-page-sub:empty {
+  display: none;
+}
+
+/* "What the agent read": one small heading per part it got. */
+.llm-source-page-read-label {
+  margin: 14px 0 6px;
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-11);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.llm-source-page-read-label:first-child {
+  margin-top: 0;
+}
+
+.llm-source-page-quote mark {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: inherit;
+}
+
+/* ---------------------------------------------------------------------------
+ * Docked Task progress: a question's sections as soft cards (Steps, then In
+ * your library / Scholarly search / Web, the most used first). A quiet fill,
+ * no border: the one place the flat style takes a container, so sections
+ * read as bounded without lines.
+ * ------------------------------------------------------------------------- */
+.llm-task-progress-dock-questions
+  .llm-task-progress-question-body.llm-task-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 12px;
+}
+
+.llm-task-card {
+  min-width: 0;
+  padding: 2px 4px 4px;
+  border-radius: 10px;
+  background: var(
+    --llm-task-card-bg,
+    color-mix(in srgb, var(--fill-primary) 4%, transparent)
+  );
+}
+
+.llm-task-card[hidden],
+.llm-task-card-body[hidden],
+.llm-task-fold-slot[hidden],
+.llm-task-offer-slot[hidden],
+.llm-task-card .llm-task-progress-list[hidden] {
+  display: none;
+}
+
+.llm-task-card-head {
+  appearance: none;
+  display: block;
   box-sizing: border-box;
   width: 100%;
+  min-height: 0;
   margin: 0;
-  padding: 8px;
+  padding: 7px 8px 7px 6px;
   border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--fill-primary);
+  border-radius: 6px;
+  background: none;
+  color: var(--fill-secondary);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.llm-web-sources-question-head:hover {
-  background: color-mix(in srgb, var(--fill-primary) 5%, transparent);
+.llm-task-card-head:disabled {
+  color: var(--fill-secondary);
+  cursor: default;
 }
 
-.llm-web-sources-question-head:focus-visible {
+.llm-task-card-head:not(:disabled):hover {
+  color: var(--fill-primary);
+}
+
+.llm-task-card-head:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: -2px;
 }
 
-.llm-web-sources-question-icon {
-  width: 16px;
-  height: 16px;
-  margin: 2px 0 0 2px;
-  background: var(--fill-tertiary);
-  mask: url("icons/action-mode-global.svg") center / contain no-repeat;
-  -webkit-mask: url("icons/action-mode-global.svg") center / contain no-repeat;
-}
-
-.llm-web-sources-question-words {
-  display: -webkit-box;
-  overflow: hidden;
-  font-weight: 600;
-  line-height: 1.4;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-}
-
-.llm-web-sources-chevron {
-  display: inline-flex;
+.llm-task-card-line {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  margin-top: 2px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.llm-task-card-chevron {
+  display: inline-flex;
+  flex: 0 0 12px;
   color: var(--fill-tertiary);
+  transition: transform 150ms ease;
 }
 
-.llm-web-sources-chevron svg {
-  transition: transform 0.15s;
+.llm-task-card-head[aria-expanded="true"] .llm-task-card-chevron {
+  transform: rotate(90deg);
 }
 
-.llm-web-sources-question-head[aria-expanded="true"]
-  .llm-web-sources-chevron
-  svg {
-  transform: rotate(180deg);
+.llm-task-card-empty .llm-task-card-chevron {
+  visibility: hidden;
 }
 
-.llm-web-sources-question-meta {
-  grid-column: 2 / 4;
-  margin-top: 2px;
+.llm-task-card-title {
+  flex: 0 0 auto;
+  font-size: var(--llm-fs-10);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.llm-task-card-counts {
+  min-width: 0;
+  margin-inline-start: auto;
+  overflow: hidden;
   color: var(--fill-tertiary);
   font-size: var(--llm-fs-11);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.4;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.llm-web-sources-question-meta > span:empty {
+.llm-task-card .llm-task-progress-steps {
+  margin: 0;
+  padding: 0 6px 4px;
+  border: 0;
+}
+
+.llm-task-card .llm-task-group-why {
+  padding: 0 6px 4px;
+}
+
+.llm-task-cards .llm-task-progress-quiet {
+  padding: 0 6px;
+}
+
+.llm-task-cards .llm-task-group-offer {
+  padding: 0 6px;
+}
+
+/* Rows in a card: sign | icon | title over its line | tag | a fixed slot
+ * (the state word; hovering swaps in copy and open-in-browser) | chevron.
+ * No numbers. */
+.llm-task-card .llm-task-progress-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.llm-task-card .llm-task-paper + .llm-task-paper,
+.llm-task-card .llm-task-progress-list + .llm-task-progress-list {
+  border-top: 1px solid color-mix(in srgb, var(--fill-primary) 6%, transparent);
+}
+
+.llm-task-card .llm-task-paper-summary {
+  padding: 7px 6px;
+  border-radius: 8px;
+}
+
+.llm-task-card .llm-task-paper-grid,
+.llm-task-card .llm-task-paper-removable:hover .llm-task-paper-grid,
+.llm-task-card .llm-task-paper-removable:focus-within .llm-task-paper-grid {
+  grid-template-columns: 16px 16px minmax(0, 1fr) auto auto 14px;
+  column-gap: 8px;
+  row-gap: 1px;
+}
+
+.llm-task-card .llm-task-paper-name {
+  display: contents;
+}
+
+.llm-task-card .llm-task-paper-index {
   display: none;
 }
 
-.llm-web-sources-question-meta > span:not(:empty) ~ span:not(:empty)::before {
-  content: " · ";
+.llm-task-card .llm-task-paper-dot {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  align-self: center;
 }
 
-.llm-web-sources-question-body {
-  padding: 0 0 6px 30px;
+.llm-task-card .llm-task-source-icon {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+}
+
+.llm-task-card .llm-task-paper-name > .llm-task-paper-title {
+  display: block;
+  grid-row: 1;
+  grid-column: 3;
+}
+
+.llm-task-card .llm-task-paper-cite {
+  grid-row: 1 / span 2;
+  grid-column: 5;
+  align-self: center;
+  /* Readable on the card's fill in dark and light themes alike. */
+  background: color-mix(in srgb, var(--color-accent) 24%, transparent);
+  color: color-mix(in srgb, var(--color-accent) 55%, var(--fill-primary));
+}
+
+.llm-task-paper-cite.llm-task-paper-cite-named {
+  background: color-mix(in srgb, var(--fill-primary) 9%, transparent);
+  color: var(--fill-secondary);
+}
+
+.llm-task-card .llm-task-paper-tail {
+  grid-row: 1 / span 2;
+  grid-column: 4;
+  justify-self: end;
+  align-self: center;
+}
+
+.llm-task-card .llm-task-paper-chevron {
+  grid-row: 1 / span 2;
+  grid-column: 6;
+  align-self: center;
+}
+
+.llm-task-card .llm-task-paper-meta {
+  grid-row: 2;
+  grid-column: 3;
+  padding-inline-start: 0;
+}
+
+/* Copy, open in the browser and remove sit in the state word's slot. */
+.llm-task-card .llm-task-source-actions {
+  top: calc(
+    7px + (var(--llm-fs-12) * 1.35 + var(--llm-fs-10) * 1.35 + 1px) / 2 - 11px
+  );
+  right: 28px;
+  width: 54px;
+  justify-content: flex-end;
+}
+
+.llm-task-card .llm-task-paper-remove {
+  top: calc(
+    7px + (var(--llm-fs-12) * 1.35 + var(--llm-fs-10) * 1.35 + 1px) / 2 - 11px
+  );
+  right: 28px;
+}
+
+/* The "Cited" tag sits at the row's right, beside the chevron; hovered, the
+   row's buttons take its place and the state word's. */
+.llm-task-card .llm-task-paper-removable:hover .llm-task-paper-tail,
+.llm-task-card .llm-task-paper-removable:focus-within .llm-task-paper-tail,
+.llm-task-card .llm-task-paper-removable:hover .llm-task-paper-cite,
+.llm-task-card .llm-task-paper-removable:focus-within .llm-task-paper-cite,
+.llm-task-card .llm-task-source-has-actions:hover .llm-task-paper-cite,
+.llm-task-card .llm-task-source-has-actions:focus-within .llm-task-paper-cite {
+  visibility: hidden;
+}
+
+.llm-task-card .llm-task-paper-removable:hover .llm-task-paper-chevron,
+.llm-task-card .llm-task-paper-removable:focus-within .llm-task-paper-chevron {
+  justify-self: auto;
+}
+
+/* The guide line runs down from the middle of the row's check: the
+   summary's 6px padding plus half the 16px check, less half the line. */
+.llm-task-card .llm-task-paper-details {
+  margin: 0 8px 10px calc(6px + 8px - 0.5px);
+}
+
+/* The rows the answer did not use fold into one line. */
+.llm-task-fold {
+  appearance: none;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fill-secondary);
+  font: inherit;
+  font-size: var(--llm-fs-11);
+  text-align: left;
+  cursor: pointer;
+}
+
+.llm-task-fold:hover {
+  background: color-mix(in srgb, var(--fill-primary) 4%, transparent);
+  color: var(--fill-primary);
+}
+
+.llm-task-fold-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.llm-task-fold-chevron {
+  display: inline-flex;
+  flex: 0 0 16px;
+  justify-content: center;
+  transition: transform 150ms ease;
+}
+
+.llm-task-fold[aria-expanded="true"] .llm-task-fold-chevron {
+  transform: rotate(90deg);
+}
+
+.llm-task-fold-more {
+  padding: 6px 6px 2px 30px;
+}
+
+/* A web or scholarly row opened: where the answer uses it, then its page. */
+.llm-task-source-in-answer {
+  margin-top: 4px;
+}
+
+.llm-task-source-link {
+  appearance: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: color-mix(in srgb, var(--color-accent) 55%, var(--fill-primary));
+  font: inherit;
+  font-size: var(--llm-fs-11);
+  cursor: pointer;
+}
+
+.llm-task-source-link:hover,
+.llm-task-source-link:focus-visible {
+  outline: none;
+  text-decoration: underline;
+}
+
+.llm-task-source-open {
+  margin-top: 2px;
+}
+
+/* "Show in answer": the sentence lit softly, one pulse, until the next
+ * click in the chat. */
+.llm-answer-quote-highlight,
+.llm-answer-quote-chip,
+.llm-quote-card.llm-answer-quote-card[data-expanded],
+.llm-answer-quote-row > td,
+.llm-answer-quote-row > th {
+  border-radius: 3px;
+  background: color-mix(in srgb, #f5c84c 22%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, #f5c84c 22%, transparent);
+}
+
+.llm-answer-quote-highlight.llm-answer-quote-pulse,
+.llm-answer-quote-chip.llm-answer-quote-pulse,
+.llm-answer-quote-card.llm-answer-quote-pulse,
+.llm-answer-quote-row.llm-answer-quote-pulse > td,
+.llm-answer-quote-row.llm-answer-quote-pulse > th {
+  animation: llm-answer-quote-pulse 1.6s ease-out;
+}
+
+@keyframes llm-answer-quote-pulse {
+  0%,
+  35% {
+    background: color-mix(in srgb, #f5c84c 45%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, #f5c84c 45%, transparent);
+  }
+  100% {
+    background: color-mix(in srgb, #f5c84c 22%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, #f5c84c 22%, transparent);
+  }
+}
+
+/* Stronger on a dark chat, where the light yellow would barely show. */
+@media (prefers-color-scheme: dark) {
+  .llm-answer-quote-highlight,
+  .llm-answer-quote-chip,
+  .llm-quote-card.llm-answer-quote-card[data-expanded],
+  .llm-answer-quote-row > td,
+  .llm-answer-quote-row > th {
+    background: color-mix(in srgb, #f5c84c 34%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, #f5c84c 34%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llm-answer-quote-highlight.llm-answer-quote-pulse,
+  .llm-answer-quote-chip.llm-answer-quote-pulse,
+  .llm-answer-quote-card.llm-answer-quote-pulse,
+  .llm-answer-quote-row.llm-answer-quote-pulse > td,
+  .llm-answer-quote-row.llm-answer-quote-pulse > th {
+    animation: none;
+  }
+}
+
+/* A source's page: back, icon, the title over its domain, copy and globe.
+ * The row grows to hold both lines. */
+.llm-source-page > .llm-standalone-content-title {
+  height: auto;
+  padding-block: 6px;
+}
+
+.llm-source-page .llm-source-page-name > .llm-standalone-content-title-text {
+  display: block;
+  line-height: 1.3;
+}
+
+.llm-source-page .llm-source-page-sub {
+  line-height: 1.3;
+}
+
+/* "What the agent read": the agent's exact words that the answer used. */
+.llm-source-page-used {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--llm-diff-add-fg) 24%, transparent);
+  color: inherit;
 }

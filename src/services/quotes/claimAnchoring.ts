@@ -301,7 +301,7 @@ export function reanchorQuoteCitationsToClaims(params: {
   const decisions: ClaimAnchorDecision[] = [];
   const quoteCitations = params.quoteCitations.map(
     (citation): QuoteCitation => {
-      // Paragraph footers disclose the exact source passage the model chose.
+      // A cited sentence's mark discloses the exact source passage the model chose.
       // A separate quote card must not silently change that shared evidence.
       if (paragraphIds.has(citation.id)) return citation;
       const claim = claims.get(citation.id);

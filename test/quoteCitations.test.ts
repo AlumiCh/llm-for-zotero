@@ -463,7 +463,7 @@ describe("quoteCitations", function () {
     assert.notInclude(prompt, "citationLabel");
   });
 
-  it("distinguishes paragraph support from reading recommendations", function () {
+  it("distinguishes sentence support from reading recommendations", function () {
     const citation = buildQuoteCitation({
       quoteText:
         "Representational drift changed the neural response pattern across repeated sessions.",
@@ -477,7 +477,12 @@ describe("quoteCitations", function () {
     const prompt = buildQuoteAnchorPromptBlock([citation!]).join("\n");
 
     assert.include(prompt, "Verified quote anchors");
-    assert.include(prompt, "At the end of an explanatory paragraph");
+    assert.include(
+      prompt,
+      "At the end of each sentence that a passage supports, just before its final punctuation",
+    );
+    assert.include(prompt, `Sentence support: [[cite:${citation!.id}]]`);
+    assert.notMatch(prompt, /paragraph/i);
     assert.include(prompt, "recommend a passage the reader should read");
     assert.notInclude(prompt, "Quote anchors for direct evidence:");
   });

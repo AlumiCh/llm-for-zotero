@@ -689,6 +689,8 @@ function createSavedFileImage(
   const img = doc.createElement("img") as HTMLImageElement;
   img.className = className;
   img.alt = fileBaseName(path);
+  // A saved drawing gets a white backdrop (zoteroPane.css).
+  if (fileExtension(path) === "svg") img.dataset.llmImageKind = "svg";
   img.src = toFileUrl(path) || path;
   return img;
 }
@@ -740,10 +742,12 @@ async function mountCardPreview(
     } else if (previewKind === "html") {
       const source = await readText(path);
       if (source === null) return false;
+      // Saved pages sit on white: a themed one gets the light sheet.
       const frame = createSandboxedHtmlFrame(
         doc,
         source,
         "llm-saved-file-preview-frame",
+        "light",
       );
       frame.setAttribute("scrolling", "no");
       frame.setAttribute("tabindex", "-1");
@@ -1202,7 +1206,12 @@ export async function renderSavedFileInto(
   }
   if (preview === "html") {
     root.replaceChildren(
-      createSandboxedHtmlFrame(doc, source, "llm-side-panel-item-frame"),
+      createSandboxedHtmlFrame(
+        doc,
+        source,
+        "llm-side-panel-item-frame",
+        "light",
+      ),
     );
     return;
   }

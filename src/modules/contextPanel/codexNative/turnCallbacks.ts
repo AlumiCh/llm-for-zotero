@@ -14,6 +14,7 @@ import {
   applyTaskPaperUpdate,
   beginTaskRun,
   completeTaskRun,
+  syncTaskAnswerCitations,
   markTaskAnswering,
   setTaskChecklist,
   taskTurnIndexFor,
@@ -676,4 +677,9 @@ export function finishCodexNativePanelTurn(params: {
     runId: trace.runId,
     quoteCitations: params.assistantMessage.quoteCitations,
   });
+  syncTaskAnswerCitations(
+    params.conversationKey,
+    { runId: trace.runId },
+    params.assistantMessage,
+  );
 }

@@ -1,5 +1,6 @@
 import { buildSafeSvgMarkup } from "../../utils/markdown";
 import { escapeNoteHtml } from "../../utils/textSanitization";
+import { buildSvgExportMarkup } from "../../utils/previewTheme";
 import {
   importNoteImageAsset,
   type NoteImageImporter,
@@ -241,7 +242,9 @@ async function resolveFigureFenceSvgMarkup(params: {
 }): Promise<string | null> {
   const lang = normalizeFigureFenceLanguage(params.lang);
   if (lang === "svg") {
-    return buildSafeSvgMarkup(params.source);
+    // A note image leaves the plugin: light sheet on white.
+    const svgMarkup = buildSafeSvgMarkup(params.source);
+    return svgMarkup ? buildSvgExportMarkup(svgMarkup) : null;
   }
   if (!isMermaidFigureFenceLanguage(lang)) return null;
   const doc = params.options.doc || null;

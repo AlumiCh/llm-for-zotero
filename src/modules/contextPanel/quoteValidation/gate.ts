@@ -175,7 +175,7 @@ export async function applyAssistantMessageQuoteGate(
     // user sees so bare anchors and handwritten quotes take one path.
     const reviewMarkdown = buildQuoteExpandedMarkdown(
       { markdown, quoteCitations },
-      { preserveParagraphCitations: true },
+      { paragraphCitations: "preserve" },
     );
     const independentIndex =
       preparedSourceIndex ||

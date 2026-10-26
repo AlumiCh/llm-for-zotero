@@ -1562,7 +1562,12 @@ describe("noteWrite create tracking", function () {
     assert.include(note.getNote(), 'data-attachment-key="IMG100_1"');
     assert.notInclude(note.getNote(), '<pre class="lang-svg">');
     assert.notInclude(note.getNote(), "&lt;svg");
-    assert.include(rasterizedSvg, '<svg xmlns="http://www.w3.org/2000/svg"');
+    assert.match(
+      rasterizedSvg,
+      /^<svg\b[^>]*\sxmlns="http:\/\/www.w3.org\/2000\/svg"/,
+    );
+    // A note image leaves the plugin: it is drawn on white.
+    assert.include(rasterizedSvg, '<svg style="background:#ffffff"');
     assert.deepEqual(importedImageParents, [100]);
     assert.deepEqual(importedImageMimeTypes, ["image/png"]);
     assert.deepEqual(importedImageByteSizes, [pngBytes.length]);

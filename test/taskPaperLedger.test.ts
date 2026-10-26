@@ -1530,7 +1530,10 @@ describe("taskPaperLedger", function () {
         1,
       );
       const citations = [
-        ...Array.from({ length: 10 }, (_, index) => citation(`c${index}`)),
+        ...Array.from(
+          { length: TASK_PAPER_MAX_CITATIONS_PER_TURN + 2 },
+          (_, index) => citation(`c${index}`),
+        ),
         citation("c0"),
         citation("ctx-only", { itemId: undefined, contextItemId: 204 }),
         citation("unknown", { itemId: undefined, contextItemId: 999 }),

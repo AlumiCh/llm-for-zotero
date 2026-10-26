@@ -5321,8 +5321,8 @@ export function buildQuoteAnchorPromptBlock(
   if (!normalized.length) return [];
   const lines = [
     "Verified quote anchors:",
-    "- At the end of an explanatory paragraph, use [[cite:ID]] or [[cite:ID1,ID2]] for the exact passages supporting its claims. The app shows a small source footer with the original passages and PDF links. Cite at paragraph boundaries, not after every sentence.",
-    "- Use [[quote:ID]] on its own line only to recommend a passage the reader should read to address the question, or when showing exact wording helps. Avoid displaying the same passage as a card merely because it backs a paragraph.",
+    "- At the end of each sentence that a passage supports, just before its final punctuation, use one [[cite:ID]] or [[cite:ID1,ID2]] token for the exact passages supporting it. The app shows a small passage-number mark that opens the original passages and PDF links. A sentence that adds nothing from the paper gets no token.",
+    "- Use [[quote:ID]] on its own line only to recommend a passage the reader should read to address the question, or when showing exact wording helps. Avoid displaying the same passage as a card merely because it backs a sentence.",
     "- When you need to include one of these exact quotes, write only the matching token, e.g. [[quote:Q_x7a2]].",
     "- Do not manually copy the quote or sourceLabel when a quote anchor is available; the app will render the quote and clickable citation.",
     "- Quote text is provenance-locked source text: never translate or paraphrase it to match the user's language.",
@@ -5336,7 +5336,7 @@ export function buildQuoteAnchorPromptBlock(
       `- Quote anchor ${citation.id}:`,
       `  quoteText: ${jsonEscape(truncateForPrompt(citation.quoteText))}`,
       `  sourceLabel: ${jsonEscape(citation.citationLabel)}`,
-      `  Paragraph support: [[cite:${citation.id}]]. Reading recommendation: [[quote:${citation.id}]].`,
+      `  Sentence support: [[cite:${citation.id}]]. Reading recommendation: [[quote:${citation.id}]].`,
     );
   }
   return lines;

@@ -70,10 +70,15 @@ describe("direct Agent model tool surface", function () {
     // The agent-files section (put a page in the answer, save files only when
     // the user wants the file, into the chat's own folder) raised the cap
     // with the fixed prompt to 36,624 (+405) (2026-10-22).
+    // The preview color sentence (SVG and HTML drawn with currentColor and
+    // the named theme colors), in the response format and the html page
+    // rule, raised it to 37,070 (+446) (2026-10-25).
+    // Per-sentence citing in the citation contract raised it to 37,269
+    // (+199) (2026-10-26).
     assert.isAtMost(serializedToolCharacters, 26_127);
     assert.isAtMost(
       rendered.inventory.fixedPrompt.length + serializedToolCharacters,
-      36_624,
+      37_269,
     );
     assert.includeMembers(
       tools.map((tool) => tool.name),

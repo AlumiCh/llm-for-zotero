@@ -15,6 +15,8 @@ import {
   openReadOnlySidePanelTab,
   openSideChatSidePanelTab,
   openSidePanel,
+  openTaskProgressSidePanelTab,
+  hasTaskProgressSidePanelTab,
   resolveAskInSideChatTab,
   resolveSideChatContext,
   resolveSideChatContextNoteAnchors,
@@ -34,6 +36,35 @@ describe("standalone side panel state", function () {
       assert.deepEqual(state.tabs, []);
       assert.isNull(state.activeId);
       assert.isTrue(state.newTabOpen, "the New tab tab is the shown tab");
+    });
+
+    it("opens one Task progress tab, from the New tab tab or the →| button", function () {
+      const fromNewTab = openTaskProgressSidePanelTab(opened(), "progress-1");
+      assert.isTrue(fromNewTab.opened);
+      assert.isFalse(
+        fromNewTab.state.newTabOpen,
+        "it takes the New tab tab's place",
+      );
+      assert.equal(fromNewTab.state.activeId, "progress-1");
+      assert.isTrue(hasTaskProgressSidePanelTab(fromNewTab.state));
+      const history = openHistorySidePanelTab(
+        showSidePanelNewTabPage(fromNewTab.state),
+        "history-2",
+      );
+      const again = openTaskProgressSidePanelTab(history.state, "progress-3");
+      assert.isFalse(again.opened, "the open one is focused");
+      assert.equal(again.tabId, "progress-1");
+      assert.equal(again.state.activeId, "progress-1");
+      assert.lengthOf(
+        again.state.tabs.filter((tab) => tab.kind === "progress"),
+        1,
+      );
+      assert.isFalse(
+        hasTaskProgressSidePanelTab(
+          closeSidePanelTab(again.state, "progress-1"),
+        ),
+      );
+      assert.isFalse(hasTaskProgressSidePanelTab(CLOSED_SIDE_PANEL_TABS));
     });
 
     it("opens a past chat once and focuses it the second time", function () {

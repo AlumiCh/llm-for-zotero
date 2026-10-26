@@ -34,7 +34,11 @@ import { composeContextStore } from "./contexts/composeContextStore";
 import { createStreamingResponse } from "./streamingResponse";
 import { waitForTaskProgressHydrationForTests } from "./taskProgress/history";
 import { flushTaskProgressPanels } from "./taskProgress/panel";
-import { clearTaskProgress, completeTaskRun } from "./taskProgress/store";
+import {
+  clearTaskProgress,
+  completeTaskRun,
+  syncTaskAnswerCitations,
+} from "./taskProgress/store";
 import type { Message } from "./types";
 
 type Panel = { body: HTMLElement; item: Zotero.Item };
@@ -246,6 +250,7 @@ export async function startCodexTaskProgressReplay(
         runId,
         quoteCitations: assistant.quoteCitations,
       });
+      syncTaskAnswerCitations(key, { runId }, assistant);
       await trace.persist(key, generation, "completed");
       assistant.streaming = false;
       // Stored like a real turn, so the conversation can be reopened.

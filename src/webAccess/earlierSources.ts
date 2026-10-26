@@ -57,6 +57,6 @@ export function buildEarlierSourcesBlock(
     "Outside sources earlier questions in this chat found:",
     ...papers.map(line),
     ...pages.map(line),
-    "When this answer uses one of them, mark it as you mark this turn's sources: append <!--llm-web-source:SOURCE_ID--> at the end of the paragraph that uses it. You need not search or read again for what they already answer.",
+    'When this answer uses one of them, mark it as you mark this turn\'s sources: append <!--llm-web-source:SOURCE_ID--> at the end of the paragraph that uses it, with the exact words you used from it when you have them word for word (<!--llm-web-source:SOURCE_ID="exact words"-->). You need not search or read again for what they already answer.',
   ].join("\n");
 }

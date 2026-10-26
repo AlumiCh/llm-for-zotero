@@ -32,6 +32,12 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { Marked, marked, Renderer, Tokenizer, type Tokens } from "marked";
+import {
+  PREVIEW_SURFACE_ATTRIBUTE,
+  applySvgPreviewTheme,
+  needsPreviewThemeSheet,
+  previewSurfaceFor,
+} from "./previewTheme";
 
 // =============================================================================
 // Types
@@ -522,7 +528,7 @@ function isClosedCodeFence(raw: string): boolean {
 
 function renderHtmlPreview(code: string): string {
   if (!code.trim()) return "";
-  return `<div class="llm-html-preview" data-llm-html-source="${escapeAttribute(code)}" aria-label="HTML preview"></div>`;
+  return `<div class="llm-html-preview" ${PREVIEW_SURFACE_ATTRIBUTE}="${previewSurfaceFor(code)}" data-llm-html-source="${escapeAttribute(code)}" aria-label="HTML preview"></div>`;
 }
 
 /**
@@ -681,13 +687,18 @@ export function buildSafeSvgMarkup(
   return svg;
 }
 
+/** An already safe drawing as an image URI. */
+export function svgMarkupToDataUri(svg: string): string {
+  return `data:image/svg+xml;base64,${encodeBase64Utf8(svg)}`;
+}
+
 export function buildSafeSvgDataUri(
   code: string,
   maxChars = SVG_PREVIEW_MAX_CHARS,
 ): string | null {
   const svg = buildSafeSvgMarkup(code, maxChars);
   if (!svg) return null;
-  return `data:image/svg+xml;base64,${encodeBase64Utf8(svg)}`;
+  return svgMarkupToDataUri(svg);
 }
 
 function renderMermaidPreview(code: string): string {
@@ -1846,12 +1857,21 @@ function renderCodeBlock(code: string, raw: string): string {
   const codeHtml = renderCodeHtml(code, lang);
 
   const safeSvgMarkup = lang === "svg" ? buildSafeSvgMarkup(code) : null;
+  // A themed drawing starts in the light theme; the chat swaps it to the
+  // current theme once it is mounted (syncPreviewThemes).
+  const svgSurface = safeSvgMarkup ? previewSurfaceFor(safeSvgMarkup) : null;
   const svgPreviewUri = safeSvgMarkup
-    ? buildSafeSvgDataUri(safeSvgMarkup)
+    ? svgMarkupToDataUri(
+        needsPreviewThemeSheet(safeSvgMarkup)
+          ? applySvgPreviewTheme(safeSvgMarkup, "light")
+          : safeSvgMarkup,
+      )
     : null;
+  const svgThemeAttribute =
+    svgSurface === "themed" ? ` data-llm-preview-theme="light"` : "";
   const svgPreview =
     safeSvgMarkup && svgPreviewUri
-      ? `<div class="llm-svg-preview" data-llm-svg-source="${escapeAttribute(safeSvgMarkup)}" aria-label="SVG preview"><img src="${escapeAttribute(svgPreviewUri)}" alt="SVG preview" /></div>`
+      ? `<div class="llm-svg-preview" ${PREVIEW_SURFACE_ATTRIBUTE}="${svgSurface}"${svgThemeAttribute} data-llm-svg-source="${escapeAttribute(safeSvgMarkup)}" aria-label="SVG preview"><img src="${escapeAttribute(svgPreviewUri)}" alt="SVG preview" /></div>`
       : "";
   const mermaidPreview = isMermaidFenceLanguage(lang)
     ? renderMermaidPreview(code)

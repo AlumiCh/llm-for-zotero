@@ -1,6 +1,7 @@
 import { config } from "../../package.json";
 import { getIOUtils } from "./geckoFs";
 import { joinLocalPath } from "./localPath";
+import { PREVIEW_COLOR_INSTRUCTION } from "./previewTheme";
 
 /**
  * Where the agent saves files it makes for the user: one folder per paper
@@ -224,7 +225,7 @@ export function agentFilesTargetForScope(scope: {
 export function buildAgentFilesInstruction(folder: string | null): string {
   const lines = [
     "Pages and files you make:",
-    '- A web page, interactive explainer, or "HTML file" to read: put the whole page in the answer as one ```html block (the chat previews it safely). Do not also save it.',
+    `- A web page, interactive explainer, or "HTML file" to read: put the whole page in the answer as one \`\`\`html block (the chat previews it safely). Do not also save it. ${PREVIEW_COLOR_INSTRUCTION}`,
     "- Save to disk only when the user wants the file itself (save, export, download, a named place) or it cannot be shown in an answer (data, binaries, many files).",
   ];
   if (folder) {

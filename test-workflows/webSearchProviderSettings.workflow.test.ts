@@ -357,11 +357,16 @@ describe("workflow: web search provider choice", function () {
     assert.deepEqual(search!.parameters?.required, ["query", "need"]);
     assert.property(search!.parameters?.properties || {}, "gap");
     assert.include(search!.description || "", "DeepSeek Search");
-    assert.deepEqual(
-      Object.keys(deepseekTools.get("web_read")?.parameters?.properties || {}),
-      ["urls"],
-      "web_read takes only URLs on DeepSeek",
+    const deepseekRead = Object.keys(
+      deepseekTools.get("web_read")?.parameters?.properties || {},
     );
+    assert.include(deepseekRead, "urls", "web_read takes URLs on DeepSeek");
+    for (const name of ["query", "depth", "chunksPerSource"])
+      assert.notInclude(
+        deepseekRead,
+        name,
+        `web_read has no ${name} on DeepSeek`,
+      );
 
     // Back to Tavily: only its section shows, and it needs its own key.
     chooseProvider(win, "tavily");

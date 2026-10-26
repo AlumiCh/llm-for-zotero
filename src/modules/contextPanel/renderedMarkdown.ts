@@ -1,6 +1,7 @@
 import { config } from "../../../package.json";
 import {
   buildSafeSvgMarkup,
+  svgMarkupToDataUri,
   renderMathPreviewHtml,
   renderMarkdown,
   renderMarkdownMemoized,
@@ -26,6 +27,14 @@ import {
 import { sanitizeText } from "../../utils/textSanitization";
 import { createSandboxedHtmlFrame } from "./htmlPreviewFrame";
 import { t } from "../../utils/i18n";
+import {
+  PREVIEW_SURFACE_ATTRIBUTE,
+  applySvgPreviewTheme,
+  buildSvgExportMarkup,
+  previewThemeFor,
+  needsPreviewThemeSheet,
+  usesPreviewTheme,
+} from "../../utils/previewTheme";
 import {
   adoptContentBarButton,
   appendContentBarButton,
@@ -318,10 +327,23 @@ function getMermaidThemeElements(
   return elements;
 }
 
+/**
+ * The standalone window copies Zotero's theme a moment after the switch and
+ * records it on its root; that record is the window's theme.
+ */
+const STANDALONE_CHAT_ROOT_ID = "llmforzotero-standalone-chat-root";
+const STANDALONE_THEME_ATTRIBUTE = "data-standalone-theme";
+
 function getMermaidThemeKey(
   doc: Document,
   anchor?: HTMLElement,
 ): MermaidThemeKey {
+  const standaloneTheme = doc
+    .getElementById?.(STANDALONE_CHAT_ROOT_ID)
+    ?.getAttribute(STANDALONE_THEME_ATTRIBUTE);
+  if (standaloneTheme === "light" || standaloneTheme === "dark") {
+    return standaloneTheme;
+  }
   const root = doc.documentElement;
   const body = doc.body;
   const darkHint = Boolean(
@@ -485,7 +507,12 @@ function ensureMermaidThemeWatcher(doc: Document, root?: ParentNode): void {
     const observer = new MutationObserverCtor(scheduleRerender);
     observer.observe(element, {
       attributes: true,
-      attributeFilter: ["class", "style", "lwtheme-brighttext"],
+      attributeFilter: [
+        "class",
+        "style",
+        "lwtheme-brighttext",
+        STANDALONE_THEME_ATTRIBUTE,
+      ],
     });
     watcher.observations.push({ target: element, observer });
   };
@@ -493,9 +520,12 @@ function ensureMermaidThemeWatcher(doc: Document, root?: ParentNode): void {
   // Only elements that outlive a single render are observed. The rendered
   // markdown root is replaced on every render, and the theme re-render walks
   // the whole document anyway, so observing it would grow the list without
-  // catching any theme change these three do not already catch.
+  // catching any theme change these do not already catch.
   observeElement(doc.documentElement);
   observeElement(doc.body);
+  // The standalone window: its copy of Zotero's theme lands after the
+  // prefers-color-scheme change, so the switch is caught here.
+  observeElement(doc.getElementById?.(STANDALONE_CHAT_ROOT_ID));
   if (root && root.nodeType === 1) {
     observeElement((root as Element).closest(".llm-panel"));
   }
@@ -1632,9 +1662,14 @@ function openSvgPreviewFullView(
   preview: HTMLElement,
   svgMarkup: string,
 ): void {
-  const themeKey = getMermaidThemeKey(doc, preview);
+  // A paper drawing opens on the white (light) viewer in every theme; a
+  // themed one carries its sheet into the viewer.
+  const themeKey = previewThemeFor(svgMarkup, getMermaidThemeKey(doc, preview));
+  const viewerMarkup = needsPreviewThemeSheet(svgMarkup)
+    ? applySvgPreviewTheme(svgMarkup, themeKey)
+    : svgMarkup;
   const opened = openStandaloneSvgWindow(doc, {
-    svgMarkup,
+    svgMarkup: viewerMarkup,
     themeKey,
     title: "SVG Preview",
     ariaLabel: "SVG preview",
@@ -1642,7 +1677,7 @@ function openSvgPreviewFullView(
     zoomTargetLabel: "SVG preview",
   });
   if (!opened) {
-    openSvgViewer(doc, svgMarkup, preview, themeKey, {
+    openSvgViewer(doc, viewerMarkup, preview, themeKey, {
       ariaLabel: "SVG preview",
       toolbarLabel: "SVG preview viewer controls",
       zoomTargetLabel: "SVG preview",
@@ -1661,7 +1696,7 @@ function openHtmlPreviewFullView(
     kind: "html",
     source,
     title: t("HTML preview"),
-    themeKey: getMermaidThemeKey(doc, preview),
+    themeKey: previewThemeFor(source, getMermaidThemeKey(doc, preview)),
   });
   if (!opened) openHtmlPreviewViewer(doc, source, preview);
 }
@@ -1700,16 +1735,18 @@ export function openHtmlPreviewViewer(
   source: string,
   anchor: HTMLElement,
 ): void {
+  const appTheme = getMermaidThemeKey(doc, anchor);
   const viewerFrame = createSandboxedHtmlFrame(
     doc,
     source,
     "llm-html-preview-viewer-frame",
+    appTheme,
   );
   openPreviewViewer(
     doc,
     viewerFrame,
     anchor,
-    getMermaidThemeKey(doc, anchor),
+    previewThemeFor(source, appTheme),
     {
       ariaLabel: t("HTML preview"),
       toolbarLabel: t("HTML preview viewer controls"),
@@ -1730,7 +1767,9 @@ function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
     if (!source.trim()) continue;
     preview.dataset.llmHtmlHydrated = "true";
 
-    const frame = createSandboxedHtmlFrame(doc, source);
+    const appTheme = getMermaidThemeKey(doc, preview);
+    const frame = createSandboxedHtmlFrame(doc, source, undefined, appTheme);
+    if (usesPreviewTheme(source)) preview.dataset.llmPreviewTheme = appTheme;
     if (isInFlatContentScope(preview)) {
       // Only the page: the hover bar (attachFlatPreviewChrome) has the rest.
       preview.replaceChildren(frame);
@@ -1748,6 +1787,59 @@ function attachRenderedHtmlPreviews(root: ParentNode, doc: Document): void {
     preview.replaceChildren(frame, openButton);
     attachSideItemMoveButton(doc, preview, "html", source);
   }
+}
+
+/**
+ * Recolors themed drawings and pages for the current theme. A drawing gets a
+ * new picture; a page gets a new frame, because its srcdoc must load only once
+ * (guardHtmlPreviewNavigation). Paper previews never change. Returns whether
+ * the root holds a themed preview, so the theme watcher is installed for it.
+ */
+function syncPreviewThemes(root: ParentNode, doc: Document): boolean {
+  const themed = `[${PREVIEW_SURFACE_ATTRIBUTE}="themed"]`;
+  const drawings = Array.from(
+    root.querySelectorAll(`.llm-svg-preview${themed}[data-llm-svg-source]`),
+  ) as HTMLElement[];
+  const pages = Array.from(
+    root.querySelectorAll(`.llm-html-preview${themed}[data-llm-html-source]`),
+  ) as HTMLElement[];
+  for (const preview of drawings) {
+    const theme = getMermaidThemeKey(doc, preview);
+    if (preview.dataset.llmPreviewTheme === theme) continue;
+    const svgMarkup = buildSafeSvgMarkup(preview.dataset.llmSvgSource || "");
+    // The picture may have moved into a tab's zoom stage.
+    const picture = preview.querySelector("img");
+    if (!svgMarkup || !picture) continue;
+    picture.setAttribute(
+      "src",
+      svgMarkupToDataUri(applySvgPreviewTheme(svgMarkup, theme)),
+    );
+    preview.dataset.llmPreviewTheme = theme;
+  }
+  for (const preview of pages) {
+    if (preview.dataset.llmHtmlHydrated !== "true") continue;
+    const theme = getMermaidThemeKey(doc, preview);
+    if (preview.dataset.llmPreviewTheme === theme) continue;
+    // A page that tried to leave was replaced by a note: leave it.
+    const oldFrame = preview.querySelector(":scope > iframe");
+    if (!oldFrame) continue;
+    const frame = createSandboxedHtmlFrame(
+      doc,
+      preview.dataset.llmHtmlSource || "",
+      oldFrame.getAttribute("class") || undefined,
+      theme,
+    );
+    preview.replaceChild(frame, oldFrame);
+    preview.dataset.llmPreviewTheme = theme;
+  }
+  return drawings.length > 0 || pages.length > 0;
+}
+
+export function syncPreviewThemesForTests(
+  root: ParentNode,
+  doc: Document,
+): boolean {
+  return syncPreviewThemes(root, doc);
 }
 
 /**
@@ -2338,6 +2430,9 @@ async function renderMermaidBlocksNow(
   doc: Document,
   options?: MermaidRenderOptions,
 ): Promise<void> {
+  // The theme watcher re-runs this pass on every theme change; themed
+  // drawings and pages follow it here too.
+  if (syncPreviewThemes(root, doc)) ensureMermaidThemeWatcher(doc, root);
   const previews = Array.from(
     root.querySelectorAll(".llm-mermaid-preview[data-llm-mermaid-source]"),
   ) as HTMLElement[];
@@ -2580,7 +2675,9 @@ function getVisualCodeBlockPreview(shell: HTMLElement): HTMLElement | null {
 function getVisualCodeBlockSvgMarkup(shell: HTMLElement): string | null {
   const svgPreview = getDirectChildWithClass(shell, "llm-svg-preview");
   if (svgPreview) {
-    return buildSafeSvgMarkup(svgPreview.dataset.llmSvgSource || "");
+    // The copied PNG leaves the plugin: light sheet on white.
+    const svgMarkup = buildSafeSvgMarkup(svgPreview.dataset.llmSvgSource || "");
+    return svgMarkup ? buildSvgExportMarkup(svgMarkup) : null;
   }
   const mermaidPreview = getDirectChildWithClass(shell, "llm-mermaid-preview");
   const renderedSvg = mermaidPreview?.dataset.llmRenderedSvg || "";
@@ -2966,7 +3063,10 @@ export function attachFlatPreviewChrome(root: ParentNode, doc: Document): void {
             const svgMarkup = readSvgMarkup();
             if (!svgMarkup) return;
             saveButton.disabled = true;
-            void saveFlatPreviewAsImage(doc, kind, preview, svgMarkup).then(
+            // A saved drawing leaves the plugin: light sheet on white.
+            const imageMarkup =
+              kind === "svg" ? buildSvgExportMarkup(svgMarkup) : svgMarkup;
+            void saveFlatPreviewAsImage(doc, kind, preview, imageMarkup).then(
               (result) => {
                 saveButton.disabled = false;
                 if (result === "cancelled") return;
@@ -3495,6 +3595,7 @@ export function renderRenderedMarkdownInto(
   attachFlatCodeBlockChrome(target, doc);
   attachRenderedSvgPreviewButtons(target, doc);
   attachRenderedHtmlPreviews(target, doc);
+  syncPreviewThemes(target, doc);
   attachFlatPreviewChrome(target, doc);
   attachFlatTableChrome(target, doc);
   attachFlatMathChrome(target, doc);
