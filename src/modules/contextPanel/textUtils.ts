@@ -522,6 +522,17 @@ export function setTokenUsage(
     cacheProvider?: string;
   } = {},
 ): void {
+  if (
+    typeof options.cacheHitRatio === "number" &&
+    Number.isFinite(options.cacheHitRatio)
+  ) {
+    const percent = Math.round(
+      Math.max(0, Math.min(1, options.cacheHitRatio)) * 100,
+    );
+    el.dataset.cache = `${t("Cache hit")} ${percent}%`;
+  } else {
+    delete el.dataset.cache;
+  }
   const normalizedTokens = Math.max(0, sessionTokens);
   if (
     typeof contextWindow === "number" &&
@@ -600,6 +611,7 @@ export function setTokenUsage(
   el.dataset.summary = presentation.summary;
   el.dataset.detail = presentation.detail;
   delete el.dataset.warning;
+  delete el.dataset.cache;
   el.style.display = "";
   if (gaugeEl) {
     gaugeEl.style.display = "inline-block";

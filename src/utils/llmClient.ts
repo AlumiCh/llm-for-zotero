@@ -114,6 +114,7 @@ import {
 } from "./modelInputCap";
 import { resolveProviderCapabilities } from "../providers";
 import {
+  anthropicPromptTokens,
   extractContextCacheUsage,
   type ContextCachePlan,
 } from "../contextCache/manager";
@@ -2776,7 +2777,8 @@ async function parseAnthropicStreamResponse(
             parsed.message?.usage &&
             onUsage
           ) {
-            const inputTokens = parsed.message.usage.input_tokens ?? 0;
+            // input_tokens leaves out the cached tokens; the prompt is all three.
+            const inputTokens = anthropicPromptTokens(parsed.message.usage);
             const outputTokens = parsed.message.usage.output_tokens ?? 0;
             const totalTokens = inputTokens + outputTokens;
             if (inputTokens > 0 || totalTokens > 0) {

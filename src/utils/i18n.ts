@@ -263,6 +263,7 @@ const zhCN: Record<string, string> = {
   Reasoning: "推理",
   "Coming later": "即将推出",
   "Context window:": "上下文窗口：",
+  "Cache hit": "缓存命中",
   "Context window usage unavailable": "上下文窗口使用量不可用",
   "Estimated active context window usage": "预计活动上下文窗口使用量",
   "Active context window usage": "活动上下文窗口使用量",
@@ -909,6 +910,8 @@ const zhCN: Record<string, string> = {
     "预设使用 GLM 面向 Agent 工具调用的 Claude 兼容端点。",
   "Gateway for a curated set of models from several vendors, billed on one key.":
     "多家服务商精选模型的聚合网关，统一使用一个密钥计费。",
+  "Subscription plan for a curated set of open coding models, billed on one key.":
+    "精选开源编程模型的订阅套餐，统一使用一个密钥计费。",
   "Preset uses DeepSeek's Anthropic-compatible endpoint for reliable agent tool use.":
     "预设使用 DeepSeek 面向稳定 Agent 工具调用的 Anthropic 兼容端点。",
   "Preset uses xAI's official Responses endpoint.":

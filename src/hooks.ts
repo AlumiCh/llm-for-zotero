@@ -1,4 +1,9 @@
 import { appLogger } from "./core/logging";
+import {
+  createStartupLifecycle,
+  waitWithTimeout,
+  watchStartupPhase,
+} from "./core/startupLifecycle";
 import { initLocale } from "./utils/locale";
 import { initI18n } from "./utils/i18n";
 import { initializeModelCapabilityRegistry } from "./modelCapabilities";
@@ -69,6 +74,13 @@ const STANDALONE_SHORTCUT_KEY_ID = "llmforzotero-key-standalone";
 // Zotero waits for shutdown before it loads an update, so a Codex child that
 // never exits must not hold the update back. Matches the bridge's stop bound.
 const CODEX_SHUTDOWN_TIMEOUT_MS = 4_000;
+// Shutdown waits this long for an unfinished startup sequence before teardown,
+// with the same bound as the Codex stop, so a stuck store cannot hold back an
+// update or a disable.
+const STARTUP_SHUTDOWN_WAIT_MS = 4_000;
+// A startup phase that runs longer than this is named in a warning, so a
+// startup that never finishes can be traced to its phase.
+const STARTUP_PHASE_WATCHDOG_MS = 15_000;
 
 let startupUserSkillsLoadTask: Promise<void> | null = null;
 let disposeHostSurfaces: (() => void) | null = null;
@@ -95,7 +107,14 @@ async function measureStartupPhase<T>(
 ): Promise<T> {
   const start = Date.now();
   try {
-    return await task();
+    return await watchStartupPhase(label, task, {
+      trace: (message) => Zotero.debug(message),
+      onSlow: (elapsedMs) =>
+        appLogger.warn(
+          `LLM startup: ${label} has not finished after ${elapsedMs}ms`,
+        ),
+      slowAfterMs: STARTUP_PHASE_WATCHDOG_MS,
+    });
   } finally {
     appLogger.info(
       `LLM startup: ${label} completed in ${Date.now() - start}ms`,
@@ -147,6 +166,7 @@ async function initializeConversationStoresForStartup(): Promise<ConversationSto
   } catch (err) {
     appLogger.warn("LLM: Failed to initialize chat store", err);
   }
+  if (startupLifecycle.isStopped()) return readiness;
   try {
     // The local usage ledger is a reporting surface, never a gate: a failure
     // here must not hold back conversation readiness.
@@ -154,12 +174,14 @@ async function initializeConversationStoresForStartup(): Promise<ConversationSto
   } catch (err) {
     appLogger.warn("LLM: Failed to initialize usage store", err);
   }
+  if (startupLifecycle.isStopped()) return readiness;
   try {
     await measureStartupPhase("Claude Code store", initClaudeCodeStore);
     readiness.claudeStoreReady = true;
   } catch (err) {
     appLogger.warn("LLM: Failed to initialize Claude Code store", err);
   }
+  if (startupLifecycle.isStopped()) return readiness;
   try {
     await measureStartupPhase(
       "Codex App Server store",
@@ -169,6 +191,7 @@ async function initializeConversationStoresForStartup(): Promise<ConversationSto
   } catch (err) {
     appLogger.warn("LLM: Failed to initialize Codex App Server store", err);
   }
+  if (startupLifecycle.isStopped()) return readiness;
   try {
     await measureStartupPhase("pending deletion store", async () => {
       configurePendingDeletionSubsystem();
@@ -187,6 +210,23 @@ async function initializeConversationStoresForStartup(): Promise<ConversationSto
   }
 
   return readiness;
+}
+
+/**
+ * Undoes what a startup phase that was still running at shutdown may have
+ * registered after teardown found nothing to undo. Both steps are idempotent.
+ */
+async function cleanUpStoppedStartup(): Promise<void> {
+  try {
+    await shutdownPaperRestoreSelections();
+  } catch (err) {
+    appLogger.debug("LLM: cleanup of stopped startup failed", err);
+  }
+  try {
+    disposePendingDeletionSubsystem();
+  } catch (err) {
+    appLogger.debug("LLM: cleanup of stopped startup failed", err);
+  }
 }
 
 function allConversationStoresReady(
@@ -420,23 +460,6 @@ function removeMainWindowFtlLinks(doc: Document): void {
     .forEach((el: Element) => el.remove());
 }
 
-async function waitWithTimeout(
-  task: Promise<unknown>,
-  timeoutMs: number,
-): Promise<boolean> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      task.then(() => true),
-      new Promise<boolean>((resolve) => {
-        timeoutId = setTimeout(() => resolve(false), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutId !== undefined) clearTimeout(timeoutId);
-  }
-}
-
 /**
  * An update closes the standalone window with the old version. The old
  * shutdown leaves a marker on the Zotero object, which survives the plugin
@@ -467,6 +490,30 @@ function reopenStandaloneAfterUpdate(): void {
   }
 }
 
+const startupLifecycle = createStartupLifecycle<_ZoteroTypes.MainWindow>({
+  registerWindow: registerMainWindow,
+  reportError: reportStartupError,
+});
+
+function reportStartupError(
+  error: unknown,
+  context: { cancelled: boolean; phase: "startup" | "window" },
+): void {
+  // Teardown disposes the host surfaces, so a step left running by shutdown
+  // may throw for that reason alone.
+  if (context.cancelled) {
+    appLogger.debug("LLM: startup step failed after shutdown began", error);
+    return;
+  }
+  appLogger.error(
+    context.phase === "window"
+      ? "LLM: main window registration failed"
+      : "LLM: startup failed",
+    error,
+  );
+  Zotero.logError(error instanceof Error ? error : new Error(String(error)));
+}
+
 async function onStartup(_reason: PluginLifecycleReason = {}) {
   // Host surface composition comes first. Services and agent code reach
   // panel-owned capabilities through bridges that throw when nothing is
@@ -477,6 +524,17 @@ async function onStartup(_reason: PluginLifecycleReason = {}) {
   // panel mounted by any later startup step already has them.
   disposePanelSurfaces = composePanelSurfaces();
 
+  // Zotero starts the next plugin only after this hook settles, so the
+  // sequence runs in the background (issue #528).
+  startupLifecycle.start(runStartupSequence);
+}
+
+/**
+ * Today's startup steps, in order. Each check of isStopped() follows an
+ * awaited phase or precedes a step that registers something: a cancelled or
+ * failed startup must register nothing more.
+ */
+async function runStartupSequence(): Promise<void> {
   await measureStartupPhase("Zotero readiness", () =>
     Promise.all([
       Zotero.initializationPromise,
@@ -484,6 +542,7 @@ async function onStartup(_reason: PluginLifecycleReason = {}) {
       Zotero.uiReadyPromise,
     ]),
   );
+  if (startupLifecycle.isStopped()) return;
 
   zoteroChangeDispatcher.registerNativeObserver();
 
@@ -494,6 +553,7 @@ async function onStartup(_reason: PluginLifecycleReason = {}) {
   } catch (err) {
     appLogger.warn("LLM: Failed to run legacy migration", err);
   }
+  if (startupLifecycle.isStopped()) return;
 
   initLocale();
   initI18n();
@@ -503,13 +563,22 @@ async function onStartup(_reason: PluginLifecycleReason = {}) {
     "model capability cache",
     initializeModelCapabilityRegistry,
   );
+  if (startupLifecycle.isStopped()) return;
 
   const conversationStoreReadiness =
     await initializeConversationStoresForStartup();
+  if (startupLifecycle.isStopped()) {
+    await cleanUpStoppedStartup();
+    return;
+  }
 
   await measureStartupPhase("paper conversation restore selections", () =>
     initializePaperRestoreSelections(conversationStoreReadiness),
   );
+  if (startupLifecycle.isStopped()) {
+    await cleanUpStoppedStartup();
+    return;
+  }
   registerPaperConversationRestoreNotifications();
 
   // A durable deletion intent that was not loaded is an active write fence,
@@ -527,15 +596,20 @@ async function onStartup(_reason: PluginLifecycleReason = {}) {
 
   registerPrefsPane();
 
+  // Zotero may already call onMainWindowLoad while this sequence runs. The
+  // hook registers nothing until this snapshot; the snapshot covers every
+  // window open now, and the hook covers every window after it.
   await measureStartupPhase("main window panel registration", () =>
-    Promise.all(Zotero.getMainWindows().map((win) => onMainWindowLoad(win))),
+    startupLifecycle.registerMainWindows(Zotero.getMainWindows()),
   );
+  if (startupLifecycle.isStopped()) return;
 
   // Mark initialized as true to confirm plugin loading status
   // outside of the plugin (e.g. scaffold testing process)
   if (__env__ === "test" || __env__ === "development") {
     const { installWorkflowTestHarness } =
       await import("./modules/contextPanel/workflowTestHarness");
+    if (startupLifecycle.isStopped()) return;
     installWorkflowTestHarness(addon);
   }
   // After the windows: the standalone window mounts against a main window.
@@ -557,7 +631,13 @@ async function onStartup(_reason: PluginLifecycleReason = {}) {
 
 const dedicatedChatPaneDisposers = new Map<Window, () => void>();
 
+// Zotero awaits this hook before it calls the next plugin's, so it must not
+// wait for the startup sequence.
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
+  startupLifecycle.onMainWindowLoad(win);
+}
+
+function registerMainWindow(win: _ZoteroTypes.MainWindow): void {
   // insertFTLIfNeeded keeps an existing link, and after an in-place update
   // that link belongs to the previous version.
   removeMainWindowFtlLinks(win.document);
@@ -647,6 +727,7 @@ function registerPrefsPane() {
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
+  startupLifecycle.onMainWindowUnload(win as _ZoteroTypes.MainWindow);
   for (const [body] of activeContextPanels) {
     if (body.ownerDocument !== win.document) continue;
     disposeSetupHandlers(body);
@@ -686,6 +767,17 @@ async function onShutdown(reason: PluginLifecycleReason = {}): Promise<void> {
 }
 
 async function shutdownPlugin(reason: PluginLifecycleReason): Promise<void> {
+  // An unfinished startup stops at its next check. A step stuck in a database
+  // call may outlive teardown; the sequence then undoes what that step
+  // registered (cleanUpStoppedStartup) and registers nothing more.
+  const startupSettled = await startupLifecycle.cancelAndWait(
+    STARTUP_SHUTDOWN_WAIT_MS,
+  );
+  if (!startupSettled) {
+    appLogger.warn(
+      `LLM: startup did not stop in ${STARTUP_SHUTDOWN_WAIT_MS}ms; continuing shutdown`,
+    );
+  }
   // Each step is isolated: one failure must not leave the rest running into
   // the next plugin instance.
   await runShutdownStep("standalone reopen marker", () => {

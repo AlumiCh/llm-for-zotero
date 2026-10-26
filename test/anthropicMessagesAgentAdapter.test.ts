@@ -1725,6 +1725,69 @@ describe("AnthropicMessagesAgentAdapter", function () {
       "does not support image input or PDF/document input",
     );
   });
+
+  it("counts cached tokens in the prompt it reports", async function () {
+    const usage = {
+      input_tokens: 100,
+      cache_read_input_tokens: 9000,
+      cache_creation_input_tokens: 500,
+      output_tokens: 50,
+    };
+    for (const streaming of [false, true]) {
+      const adapter = new AnthropicMessagesAgentAdapter();
+      const samples: Array<Record<string, unknown>> = [];
+      (
+        globalThis as typeof globalThis & {
+          ztoolkit: { getGlobal: (name: string) => unknown };
+        }
+      ).ztoolkit = {
+        getGlobal: (name: string) => {
+          if (name !== "fetch") return undefined;
+          return async () => ({
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            body: streaming
+              ? makeSseStream([
+                  `data: ${JSON.stringify({ type: "message_start", message: { usage: { ...usage, output_tokens: 1 } } })}\n\n`,
+                  'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n',
+                  'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":50}}\n\n',
+                  'data: {"type":"message_stop"}\n\n',
+                ])
+              : undefined,
+            json: async () => ({
+              content: [{ type: "text", text: "OK" }],
+              stop_reason: "end_turn",
+              usage,
+            }),
+            text: async () => "",
+          });
+        },
+      };
+      await adapter.runStep({
+        request: makeRequest(),
+        messages: [{ role: "user", content: "Search methods" }],
+        tools,
+        onUsage: (sample) => {
+          samples.push(sample as unknown as Record<string, unknown>);
+        },
+      });
+      const label = streaming ? "streaming" : "non-streaming";
+      assert.deepInclude(
+        samples[0],
+        {
+          promptTokens: 9600,
+          contextTokens: 9600,
+          cacheReadTokens: 9000,
+          cacheWriteTokens: 500,
+          cacheHitRatio: 0.9375,
+          contextWindowIsAuthoritative: true,
+        },
+        label,
+      );
+      if (!streaming) assert.equal(samples[0].totalTokens, 9650, label);
+    }
+  });
 });
 
 describe("AnthropicMessagesAgentAdapter output cap versus context window", function () {

@@ -115,7 +115,8 @@ describe("agent adapters report provider usage", function () {
       2,
       "message_start and message_delta both report",
     );
-    assert.equal(samples[0].promptTokens, 32208);
+    // input_tokens leaves out the cached tokens; the prompt counts them.
+    assert.equal(samples[0].promptTokens, 32208 + 128);
     assert.equal(samples[0].cacheReadTokens, 128);
     const maxCompletion = Math.max(
       ...samples.map((sample) => sample.completionTokens || 0),

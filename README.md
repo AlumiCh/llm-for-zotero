@@ -1,4 +1,8 @@
-# llm-for-zotero: A Research Agent System for your Zotero Library
+<p align="center">
+  <img src="./assets/label.png" alt="LLM for Zotero logo: a brain icon merged with the Zotero shield" width="512" />
+</p>
+
+# LLM-for-Zotero: A Research Agent System for your Zotero Library
 
 [![Zotero support](https://img.shields.io/badge/Zotero-supported-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![Using Zotero Plugin Template](https://img.shields.io/badge/Using-Zotero%20Plugin%20Template-blue?style=flat-square&logo=github)](https://github.com/windingwind/zotero-plugin-template)
@@ -8,11 +12,7 @@
 [![GitHub Downloads](https://img.shields.io/github/downloads/yilewang/llm-for-zotero/total?style=flat-square)](https://github.com/yilewang/llm-for-zotero/releases)
 [![buymeacoffee](https://img.shields.io/badge/Support-Buy%20Me%20A%20Coffee-FF813F?style=flat-square&logo=buy-me-a-coffee&logoColor=white)](https://buymeacoffee.com/yat.lok)
 
-<p align="center">
-  <img src="./assets/label.png" alt="LLM for Zotero logo: a brain icon merged with the Zotero shield" width="512" />
-</p>
-
-**llm-for-zotero** brings Large Language Models into the Zotero reader, so
+**LLM-for-Zotero** brings Large Language Models into the Zotero reader, so
 you can ask questions, summarize papers, inspect figures, compare sources,
 and save notes without leaving your library. It works with standard API
 providers, local OpenAI-compatible models, WebChat, Codex App-Server,
@@ -52,7 +52,7 @@ How to do a library chat literature review with llm-for-zotero agent
 - [General Web Search](#general-web-search)
 - [WebChat Setup](#webchat-setup-chatgpt-web-sync)
 - [Codex Setup](#codex-setup-chatgpt-plus-subscribers)
-- [Claude Code Setup](#claude-code-setup-experimental)
+- [Claude Code Setup](#claude-code-setup)
 - [MinerU PDF Parsing](#mineru-pdf-parsing)
 - [Privacy and Data Flow](#privacy-and-data-flow)
 - [Roadmap](#roadmap)
@@ -83,13 +83,17 @@ How to do a library chat literature review with llm-for-zotero agent
   the **Agent** tab.
 - **Claude Code Mode** runs Claude Code as a separate conversation system inside
   Zotero, using your own Claude Code login. The plugin starts and stops the
-  small bridge it needs for you. It is experimental and does not yet support
-  native Zotero API operations.
+  small bridge it needs for you. It can use the plugin's Zotero tools to read
+  your library and, with your approval, edit notes, tags, metadata, and imports.
 - **One history** lists Agent, Codex and Claude chats together. Click the
   runtime badge in the message box to switch runtimes, and attach an earlier
   conversation from the slash menu or by asking for it in plain words.
 - **Side panel** in the standalone window opens read-only past chats or a
   temporary side chat next to the main chat.
+
+<details>
+<summary>Earlier updates</summary>
+
 - **Skills** let you customize how Agent Mode handles research workflows. The
   plugin ships with 8 built-in skills and a portal for creating your own.
 - **General Web Search** lets the in-plugin Agent search the current public web with Tavily, read relevant pages, and attach source links to its answers.
@@ -107,6 +111,8 @@ How to do a library chat literature review with llm-for-zotero agent
   equations, figures, and local `mineru-api` servers, with a richer file
   manager for bulk parsing, cache repair, sync packages, tags, and parsing
   filters.
+
+</details>
 
 Thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) and
 [@boltma](https://github.com/boltma) for major contributions to the Codex App
@@ -136,6 +142,9 @@ Open `Preferences` -> `llm-for-zotero`.
 2. Paste your **API Base URL**, **secret key**, and **model name**.
 3. Click **Test Connection**.
 
+<details>
+<summary>Setup animation, protocols, and multiple models</summary>
+
 <p align="center">
   <img src="./assets/model_setting.gif" alt="Animation showing provider and model configuration" width="1024" />
 </p>
@@ -148,6 +157,8 @@ multimodal model for figures and a text model for summaries. The conversation
 panel also supports model-specific reasoning levels and hyperparameters such as
 `temperature` and `max_tokens_output`.
 
+</details>
+
 <a id="features"></a>
 
 ## Demos
@@ -157,17 +168,26 @@ panel also supports model-specific reasoning levels and hyperparameters such as
 On the first message, the model loads the current paper as context. Follow-up
 questions use focused retrieval from the same paper, keeping conversations fast
 and grounded.
+Click any generated citation to jump straight to the source passage in Zotero.
+
+<details>
+<summary>Show demo</summary>
 
 <p align="center">
   <img src="./assets/citation_jump.gif" alt="Animation showing one-click jump from an AI citation to the paper source" width="1024" />
 </p>
 
-Click any generated citation to jump straight to the source passage in Zotero.
+</details>
 
 ### Summaries and Selected Text
 
 Summarize a full paper, focus on methodology or results, or select any paragraph
 and ask the model to explain it.
+The selected-text pop-up can add highlighted text to chat with one click. It can
+also be disabled in settings.
+
+<details>
+<summary>Show demos</summary>
 
 <p align="center">
   <img src="./assets/summarize.gif" alt="Animation showing an instant paper summary in the sidebar" width="1024" />
@@ -177,13 +197,15 @@ and ask the model to explain it.
   <img src="./assets/text.gif" alt="Animation showing selected text being explained by the model" width="1024" />
 </p>
 
-The selected-text pop-up can add highlighted text to chat with one click. It can
-also be disabled in settings.
+</details>
 
 ### Figures and External Files
 
 Take screenshots of figures, attach up to 10 screenshots, or upload local files
 as additional context. Supported uploads include PDF, DOCX, PPTX, TXT, and Markdown.
+
+<details>
+<summary>Show demos</summary>
 
 <p align="center">
   <img src="./assets/screenshot.gif" alt="Animation showing screenshot-based figure interpretation" width="1024" />
@@ -193,19 +215,29 @@ as additional context. Supported uploads include PDF, DOCX, PPTX, TXT, and Markd
   <img src="./assets/upload_files.gif" alt="Animation showing external file upload for additional context" width="1024" />
 </p>
 
+</details>
+
 ### Multi-Paper Comparison
 
 Open multiple papers in Zotero tabs and type `/` to cite another paper as
 additional context.
 
+<details>
+<summary>Show demo</summary>
+
 <p align="center">
   <img src="./assets/multi.gif" alt="Animation showing cross-paper comparison using the slash command" width="1024" />
 </p>
+
+</details>
 
 ### Notes, History, and Presets
 
 Save answers or selected text to Zotero notes, export full conversations in
 Markdown, and customize quick-action presets for repeated research tasks.
+
+<details>
+<summary>Show demos</summary>
 
 <p align="center">
   <img src="./assets/save_notes.gif" alt="Animation showing model answers being saved to Zotero notes" width="1024" />
@@ -219,12 +251,17 @@ Markdown, and customize quick-action presets for repeated research tasks.
   <img src="./assets/shortcuts.gif" alt="Animation showing custom quick-action preset configuration" width="1024" />
 </p>
 
+</details>
+
 ## File-Based Notes
 
 Beyond Zotero's built-in notes, the agent can save Markdown research notes to
 any local directory you choose. Point it at an
 [Obsidian](https://obsidian.md/) vault, a [Logseq](https://logseq.com/) graph,
 or a plain folder of `.md` files.
+
+<details>
+<summary>Notes Directory settings and note examples</summary>
 
 Open `Preferences` -> `llm-for-zotero` and scroll to the **Notes Directory**
 section.
@@ -264,7 +301,15 @@ plugins, and many Markdown readers.
 > Note templates and figure-embedding rules live in the `write-note` skill.
 > Open the **Standalone Window** -> **Skills** portal to edit them.
 
+</details>
+
 ### Editing Zotero Notes With the Agent
+
+The agent keeps citations, PDF highlights, and images intact when it edits a
+Zotero note.
+
+<details>
+<summary>How note editing works</summary>
 
 - **Citations, PDF highlights, and images stay intact.** The agent sees each
   one as a placeholder such as `{{citation:3fa9c1 ("Smith", 2020, p. 42)}}`
@@ -278,6 +323,8 @@ plugins, and many Markdown readers.
   a divider, and a checklist item made only of underscores (`- [ ] ____`)
   keeps its checkbox as a fill-in blank.
 
+</details>
+
 ## Agent Mode (beta)
 
 Agent Mode is disabled by default. Turn on **Original Agent** in `Preferences`
@@ -289,6 +336,12 @@ confirmation, and undo recent write actions from the conversation.
 
 When enabled, the LLM can act on your Zotero library with read tools, write
 tools, confirmation cards, and undo.
+
+The design philosophy is simple: read tools are unrestricted; write tools stay
+reviewable and undoable.
+
+<details>
+<summary>Agent tools and long runs</summary>
 
 Long agent runs are cache-aware. The plugin keeps stable Zotero context and
 previously read evidence separate from the changing chat transcript, tracks which
@@ -310,10 +363,12 @@ again when the needed source or coverage layer is missing.
 | Task tracking            | `task_update`, `workflow_script`                                                                      | Split a compound request into parts the plugin tracks, and run several tool calls in one script with loops and conditions                                                         |
 | Safety                   | `undo`                                                                                                | Undo recorded write actions from the conversation's durable change history, one at a time or several newest-first                                                                 |
 
-The design philosophy is simple: read tools are unrestricted; write tools stay
-reviewable and undoable.
+</details>
 
 ### Agent Mode Demos
+
+<details>
+<summary>Multi-step work, related papers, tags, and notes</summary>
 
 #### Multi-step workflow
 
@@ -351,6 +406,8 @@ A configured model is required for model-assisted discovery; literature search u
 <p align="center">
   <img src="./assets/agent/write_note.png" alt="Screenshot showing agent writing a note for a paper" width="1024" />
 </p>
+
+</details>
 
 ## Skills
 
@@ -395,6 +452,9 @@ as Markdown files in `{ZoteroDataDir}/llm-for-zotero/skills/`.
 Agent Mode can search the current public web with Tavily, AnySearch, or DeepSeek and read returned pages when search-result snippets are not enough.
 Use it for current facts, official documentation, news, finance, product information, and other general-web evidence.
 Scholarly discovery remains separate: the agent searches OpenAlex, arXiv, and Europe PMC (with CrossRef and Semantic Scholar for metadata lookup), and it can combine both kinds of search when a question needs academic and general-web sources.
+
+<details>
+<summary>Set up web search with Tavily, AnySearch, or DeepSeek</summary>
 
 To enable general web search with Tavily:
 
@@ -446,6 +506,8 @@ automatically retry, switch providers, or report fictional credit usage.
 DeepSeek search uses the key of your first model profile whose API address is the official `https://api.deepseek.com`; keys of relays and other hosts are never sent to DeepSeek.
 It costs $0.75 per 1,000 successful searches or page fetches, billed to that DeepSeek account, and failed or empty calls are not billed.
 Queries are limited to 128 characters, including the site and date filters, and search queries and requested URLs are sent to DeepSeek.
+
+</details>
 
 ## Codex Setup (ChatGPT Plus Subscribers)
 
@@ -512,7 +574,7 @@ Legacy notes:
 
 </details>
 
-## Claude Code Setup (Experimental)
+## Claude Code Setup
 
 Claude Code mode runs Claude Code as a separate conversation system inside
 Zotero. It reuses the sidebar and standalone-window UI, but has its own scope
@@ -526,10 +588,11 @@ built the Claude Code integration and its bridge
 The bridge now ships inside the plugin, with the author's permission, under
 [`packages/claude-bridge`](./packages/claude-bridge)._
 
-> Claude Code mode currently does **not** support native Zotero API operations.
-> Use built-in [Agent Mode](#agent-mode-beta) for native library tools such as
-> reading item state, editing notes, tagging papers, updating metadata, or
-> importing items.
+> Claude Code mode can use the plugin's Zotero tools.
+> It searches and reads your library and papers without asking.
+> Library changes, such as editing notes, tagging papers, updating metadata, or
+> importing items, follow your Claude Code **Permission mode**.
+> In `safe` mode, they ask for your approval first.
 
 <details>
 <summary>Claude Code setup, troubleshooting, and project assets</summary>
@@ -681,6 +744,9 @@ When enabled, the plugin sends newly added PDF attachments to MinerU for parsing
 and caches the result locally. Later interactions with that paper use the
 MinerU-parsed content.
 
+<details>
+<summary>MinerU setup, local server, and cache management</summary>
+
 <p align="center">
   <img src="./assets/minerU.png" alt="Screenshot showing MinerU PDF parsing results in the plugin" width="512" />
 </p>
@@ -779,6 +845,8 @@ companion ZIP attachments containing `full.md`, `manifest.json`,
 you request it from the MinerU tab, and synced packages can restore a missing
 local cache when needed.
 
+</details>
+
 <a id="webchat-setup-chatgpt-web-sync"></a>
 
 ## WebChat Setup (ChatGPT, DeepSeek & Gemini Web Sync)
@@ -788,6 +856,9 @@ WebChat mode sends questions to [chatgpt.com](https://chatgpt.com),
 [gemini.google.com](https://gemini.google.com) through a browser extension,
 then streams responses back into Zotero. It is useful when you want browser
 chat access without a provider API key.
+
+<details>
+<summary>WebChat prerequisites and setup</summary>
 
 <p align="center">
   <img src="./assets/webchat.gif" alt="Screenshot of WebChat mode connected to chatgpt.com" width="1024" />
@@ -830,6 +901,55 @@ npm run test:webchat:live
 This opt-in gate creates a real Zotero PDF fixture and clicks the real Zotero composer send control.
 It verifies one exact PDF upload and answer, toggles the visible PDF chip both ways, then verifies one prompt-only turn with zero submitted PDFs through the relay and Chrome extension.
 
+</details>
+
+## FAQ
+
+<details>
+<summary><b>Does it require an API key to use this plugin?</b></summary>
+
+It depends on the backend you choose. The plugin supports multiple backends with different requirements:
+
+| Goal                                                        | Recommended path                                                              | API key required?               |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------- |
+| Use OpenAI, Gemini, DeepSeek, Moonshot, or another provider | Configure an API provider in Zotero preferences                               | Yes                             |
+| Use a local model                                           | Connect any OpenAI-compatible local HTTP API                                  | Usually no                      |
+| Use ChatGPT in the browser                                  | [WebChat](#webchat-setup-chatgpt-web-sync) with the Sync for Zotero extension | No                              |
+| Use Codex models with ChatGPT Plus                          | [Codex App Server](#codex-setup-chatgpt-plus-subscribers)                     | No separate API key             |
+| Use Claude Code inside Zotero                               | [Claude Code bridge](#claude-code-setup)                                      | Claude Code auth                |
+| Search and read the current public web                      | [General Web Search](#general-web-search) with Tavily                         | Tavily API key                  |
+| Improve PDF extraction for tables, equations, and figures   | [MinerU PDF parsing](#mineru-pdf-parsing)                                     | Personal MinerU key recommended |
+
+</details>
+
+> Is it free to use?
+
+- Yes, the plugin is free. You only pay for API calls if you choose a paid
+  provider. With Codex App Server, ChatGPT Plus subscribers can use Codex models
+  without a separate API key. If you find this helpful, consider leaving a star
+  on GitHub or [buying me a coffee](https://buymeacoffee.com/yat.lok).
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/1e945e57-4b99-4d25-b8d5-fb120e100b62" width="200" alt="Alipay donation QR code">
+</p>
+
+<details>
+<summary><b>Is my data used to train models?</b></summary>
+
+The plugin does not train models. Data handling depends on the backend you
+choose: your configured API provider, local model, WebChat, Codex, Claude
+Code, or MinerU.
+
+</details>
+
+<details>
+<summary><b>How do I report a bug or ask a question?</b></summary>
+
+Please [open an issue](https://github.com/yilewang/llm-for-zotero/issues) on
+GitHub.
+
+</details>
+
 ## Privacy and Data Flow
 
 Data flow depends on the backend you choose. Local models and local MinerU can
@@ -857,6 +977,13 @@ and cloud MinerU involve their respective services or companion runtimes.
 
 </details>
 
+## Contributing
+
+Contributions are welcome. Bug reports, feature requests, documentation
+improvements, and pull requests are all useful. Please
+[open an issue](https://github.com/yilewang/llm-for-zotero/issues) or submit a
+PR.
+
 ## Roadmap
 
 - [x] Agent mode (beta)
@@ -871,109 +998,3 @@ and cloud MinerU involve their respective services or companion runtimes.
 - [x] Customized skills
 - [x] Cross-device synchronization (MinerU cache)
 - [ ] Agent memory system
-
-## FAQ
-
-> **Q: Does it require an API key to use this plugin?**
->
-> A: It depends on the backend you choose. The plugin supports multiple backends with different requirements:
-
-| Goal                                                        | Recommended path                                                              | API key required?               |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------- |
-| Use OpenAI, Gemini, DeepSeek, Moonshot, or another provider | Configure an API provider in Zotero preferences                               | Yes                             |
-| Use a local model                                           | Connect any OpenAI-compatible local HTTP API                                  | Usually no                      |
-| Use ChatGPT in the browser                                  | [WebChat](#webchat-setup-chatgpt-web-sync) with the Sync for Zotero extension | No                              |
-| Use Codex models with ChatGPT Plus                          | [Codex App Server](#codex-setup-chatgpt-plus-subscribers)                     | No separate API key             |
-| Use Claude Code inside Zotero                               | [Claude Code bridge](#claude-code-setup-experimental)                         | Claude Code auth                |
-| Search and read the current public web                      | [General Web Search](#general-web-search) with Tavily                         | Tavily API key                  |
-| Improve PDF extraction for tables, equations, and figures   | [MinerU PDF parsing](#mineru-pdf-parsing)                                     | Personal MinerU key recommended |
-
-> **Q: Is it free to use?**
->
-> Yes, the plugin is free. You only pay for API calls if you choose a paid
-> provider. With Codex App Server, ChatGPT Plus subscribers can use Codex models
-> without a separate API key. If you find this helpful, consider leaving a star
-> on GitHub or [buying me a coffee](https://buymeacoffee.com/yat.lok).
-
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/1e945e57-4b99-4d25-b8d5-fb120e100b62" width="200" alt="Alipay donation QR code">
-</p>
-
-> **Q: Is my data used to train models?**
->
-> The plugin does not train models. Data handling depends on the backend you
-> choose: your configured API provider, local model, WebChat, Codex, Claude
-> Code, or MinerU.
-
-> **Q: How do I report a bug or ask a question?**
->
-> Please [open an issue](https://github.com/yilewang/llm-for-zotero/issues) on
-> GitHub.
-
-### Diagnostic logging
-
-The plugin keeps routine diagnostics quiet by default while retaining warnings and errors.
-To collect more detail, open Zotero's Advanced Configuration Editor and change the string preference `extensions.zotero.llmforzotero.logLevel`.
-
-| Value            | Diagnostic detail                                                |
-| ---------------- | ---------------------------------------------------------------- |
-| `warn` (default) | Errors and actionable warnings                                   |
-| `info`           | Significant lifecycle events and warnings/errors                 |
-| `debug`          | Detailed application diagnostics                                 |
-| `trace`          | The most detailed diagnostics, including routine maintenance SQL |
-
-Changes take effect immediately; an invalid value falls back to `warn`.
-Use Zotero's **Help → Debug Output Logging** controls to record or view the output, reproduce the problem, and then restore `warn`.
-This preference controls the plugin's diagnostic verbosity; Zotero's controls determine whether debug output is recorded or displayed.
-Other plugins' logging is unaffected.
-
-## Contributing
-
-Contributions are welcome. Bug reports, feature requests, documentation
-improvements, and pull requests are all useful. Please
-[open an issue](https://github.com/yilewang/llm-for-zotero/issues) or submit a
-PR.
-
-### Maintenance and logging regression tests
-
-Run `LLM_FOR_ZOTERO_TEST_ENTRIES=test-isolated/maintenance npm run test:workflow` with the repository's native Zotero test environment configured.
-This suite measures idle maintenance first in a fresh disposable scaffold profile, then checks live diagnostic levels against Zotero's debug output.
-Keep it separate from deletion workflows, which intentionally leave pending cleanup and retry work.
-
-### Model capability registry
-
-Model context limits and provider-defined reasoning options are maintained in [`registry/model-capabilities.v1.json`](./registry/model-capabilities.v1.json).
-The plugin refreshes this schema-validated registry and configured provider catalogs in the background, with a bounded first-use refresh when needed.
-
-**Auto — provider default** leaves reasoning controls to the endpoint.
-An unfamiliar model offers Auto until capability information is available; missing metadata never means reasoning is off.
-Explicit levels, including Off, come from the applicable profile or endpoint capabilities.
-Saved choices are checked again when the model or endpoint changes, and unavailable choices resolve to Auto.
-Explicit advanced request-body parameters retain their existing precedence.
-
-User profile overrides take priority over endpoint metadata, followed by the remote/bundled registry and established model profiles.
-A catalog's `supports_reasoning` boolean does not establish an effort list.
-The standard OpenAI `/models` API does not publish supported efforts.
-Custom endpoints may opt into the plugin's structured catalog extension: a model row's `reasoning` object uses the registry's validated `kind`, `options`, and optional `defaultOptionId` contract.
-An option can declare a portable `effort` string for OpenAI-compatible protocols or an existing declarative `controls` patch for its endpoint.
-Capability data is cached per endpoint, protocol, authentication mode, and runtime scope.
-
-Adding a verified model or effort to the remote registry does not require another plugin release once the client supports its encoding.
-Increment the registry revision, run `npm run validate:model-registry`, and publish the JSON change through the normal reviewed update process.
-This does not infer undocumented future API contracts or automatically publish model settings.
-
-### External MCP access
-
-Standalone MCP clients can use the existing bearer-authenticated `/llm-for-zotero/mcp` endpoint while Zotero is running.
-Authenticated clients can use the exposed library, file, and command tools without additional Zotero permission switches or directory grants.
-File and command access uses the operating-system permissions of the Zotero process.
-The connected assistant owns approval through its own permission settings; the plugin does not apply Original Agent Safe/Auto/YOLO or display a second permission prompt.
-Integrated Codex and Claude Code use their existing MCP enablement controls and the same delegated approval rule.
-
-Use ordinary `tools/call` requests; no Zotero chat, private turn token, or additional session handshake is required for standalone clients.
-Specify `libraryID` for predictable targeting, or omit it to resolve the currently selected library once for that call.
-Invalid arguments, unavailable targets, native read-only restrictions, and execution or verification failures remain errors.
-Writes retain durable recovery records and native Zotero verification; preserve returned action IDs for recovery.
-Standalone clients recover through the `undo` tool: pass `actionId` to undo one action, or `actionIds` to revert several (which cannot be combined with `count`).
-Do not blindly repeat a write after a timeout or uncertain outcome: inspect native state and the returned recovery information first.
-This interface does not promise exactly-once execution across repeated HTTP requests.

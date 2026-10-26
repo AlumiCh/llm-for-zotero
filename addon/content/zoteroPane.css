@@ -16306,14 +16306,23 @@ details.llm-agent-action-row[open] > summary .llm-agent-action-row-marker {
   white-space: nowrap;
 }
 
-.llm-token-usage::before {
-  content: attr(data-label) "\A" attr(data-summary) "\A" attr(data-detail);
+.llm-token-usage::before,
+.llm-token-usage[data-cache]::after {
   display: block;
   color: var(--fill-primary);
   font-size: var(--llm-fs-12);
   line-height: 1.45;
   text-align: center;
   white-space: pre;
+}
+
+.llm-token-usage::before {
+  content: attr(data-label) "\A" attr(data-summary) "\A" attr(data-detail);
+}
+
+/* Only when the provider reported cache data for the latest request. */
+.llm-token-usage[data-cache]::after {
+  content: attr(data-cache);
 }
 
 .llm-context-usage-control:hover .llm-token-usage,
