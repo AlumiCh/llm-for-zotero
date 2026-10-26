@@ -475,6 +475,184 @@ describe("mineruServerManager", function () {
       );
     });
 
+    it("kills the managed process before restarting an unhealthy running server", async function () {
+      setMineruLocalServerCommand("mineru-api");
+      const events: string[] = [];
+      let launchCount = 0;
+
+      setSubprocessLoaderForTests(
+        () =>
+          ({
+            call: async (opts) => {
+              const cmd = opts.arguments?.[1] || "";
+              if (cmd.includes("mineru")) {
+                const n = ++launchCount;
+                events.push(`launch${n}`);
+                return {
+                  pid: 3000 + n,
+                  stdout: { readString: async () => "" },
+                  stderr: { readString: async () => "" },
+                  wait: async () => new Promise(() => {}),
+                  kill: async () => {
+                    events.push(`kill${n}`);
+                    return { exitCode: 0 };
+                  },
+                };
+              }
+              return {
+                stdout: { readString: async () => "" },
+                wait: async () => ({ exitCode: 0 }),
+              };
+            },
+          }) as GeckoSubprocess,
+      );
+
+      let probe1 = 0;
+      setProbeHealthyForTests(async () => ++probe1 > 1);
+      assert.isTrue(await startMineruServer("http://127.0.0.1:8000"));
+
+      // The server hangs: it is alive but fails the health probe.
+      let probe2 = 0;
+      setProbeHealthyForTests(async () => ++probe2 > 2);
+      assert.isTrue(await startMineruServer("http://127.0.0.1:8000"));
+
+      assert.equal(launchCount, 2);
+      assert.isBelow(
+        events.indexOf("kill1"),
+        events.indexOf("launch2"),
+        "hung process must be killed before the restart",
+      );
+      assert.include(events, "kill1");
+    });
+
+    it("stops an unmanaged running server without throwing when the health recheck fails", async function () {
+      setMineruLocalServerCommand("mineru-api");
+      setSubprocessLoaderForTests(
+        () =>
+          ({
+            call: async () => ({
+              pid: 3500,
+              stdout: { readString: async () => "" },
+              stderr: { readString: async () => "" },
+              wait: async () => new Promise(() => {}),
+              kill: async () => ({ exitCode: 0 }),
+            }),
+          }) as GeckoSubprocess,
+      );
+
+      // External server: step 1 finds it healthy, so nothing is spawned.
+      setProbeHealthyForTests(async () => true);
+      assert.isTrue(await startMineruServer("http://127.0.0.1:8000"));
+      assert.isFalse(isMineruServerProcessManaged());
+
+      let probe = 0;
+      setProbeHealthyForTests(async () => ++probe > 2);
+      assert.isTrue(await startMineruServer("http://127.0.0.1:8000"));
+      assert.equal(getMineruServerStatus(), "running");
+    });
+
+    it("returns promptly for an aborted caller while another caller still waits", async function () {
+      setMineruLocalServerCommand("mineru-api");
+      setSubprocessLoaderForTests(
+        () =>
+          ({
+            call: async () => ({
+              pid: 1100,
+              stdout: { readString: async () => "" },
+              stderr: { readString: async () => "" },
+              wait: async () => new Promise(() => {}),
+              kill: async () => ({ exitCode: 0 }),
+            }),
+          }) as GeckoSubprocess,
+      );
+
+      let released = false;
+      setProbeHealthyForTests(async () => released);
+
+      const ctrl1 = new AbortController();
+      const ctrl2 = new AbortController();
+      let settled2 = false;
+      const p1 = startMineruServer(
+        "http://127.0.0.1:8000",
+        undefined,
+        ctrl1.signal,
+      );
+      const p2 = startMineruServer(
+        "http://127.0.0.1:8000",
+        undefined,
+        ctrl2.signal,
+      ).finally(() => {
+        settled2 = true;
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      ctrl1.abort();
+
+      const res1 = await p1;
+      assert.isFalse(res1, "aborted caller must return false");
+      assert.isFalse(
+        settled2,
+        "aborted caller must not wait for the shared startup",
+      );
+
+      released = true;
+      assert.isTrue(await p2);
+      assert.equal(getMineruServerStatus(), "running");
+    });
+
+    it("stops the server when the only waiting caller aborts during startup", async function () {
+      setMineruLocalServerCommand("mineru-api");
+      let killCount = 0;
+      setSubprocessLoaderForTests(
+        () =>
+          ({
+            call: async (opts) => {
+              const cmd = opts.arguments?.[1] || "";
+              if (cmd.includes("mineru")) {
+                return {
+                  pid: 1200,
+                  stdout: { readString: async () => "" },
+                  stderr: { readString: async () => "" },
+                  wait: async () => new Promise(() => {}),
+                  kill: async () => {
+                    killCount++;
+                    return { exitCode: 0 };
+                  },
+                };
+              }
+              return {
+                stdout: { readString: async () => "" },
+                wait: async () => ({ exitCode: 0 }),
+              };
+            },
+          }) as GeckoSubprocess,
+      );
+      setProbeHealthyForTests(async () => false);
+
+      const ctrl = new AbortController();
+      const p = startMineruServer(
+        "http://127.0.0.1:8000",
+        undefined,
+        ctrl.signal,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const startedAt = Date.now();
+      ctrl.abort();
+
+      assert.isFalse(await p, "aborted caller must return false");
+      assert.isBelow(Date.now() - startedAt, 1000, "must return promptly");
+
+      const deadline = Date.now() + 5000;
+      while (
+        (killCount === 0 || getMineruServerStatus() !== "stopped") &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.isAtLeast(killCount, 1, "server must be stopped as cancelled");
+      assert.equal(getMineruServerStatus(), "stopped");
+    });
+
     it("concurrent parses: cancelling first caller does not cancel the other caller", async function () {
       setMineruLocalServerCommand("mineru-api");
       let probeCount = 0;

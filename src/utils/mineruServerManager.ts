@@ -523,10 +523,8 @@ export async function startMineruServer(
   if (currentStatus === "running") {
     const stillHealthy = await probeMineruServerHealthy(baseUrl, 1000);
     if (stillHealthy) return true;
-    setServerStatus("stopped");
-    managedProcess = null;
-    managedListenerPort = null;
-    managedPid = null;
+    // A hung server may still hold the port; kill it before restarting.
+    await stopMineruServer("unhealthy");
   }
 
   const command = getMineruLocalServerCommand();
@@ -547,12 +545,32 @@ export async function startMineruServer(
     })();
   }
 
+  const sharedStart = inFlightStartPromise;
+  // Keep this request registered until the shared startup settles, so the
+  // startup loop still sees an aborted sole caller and stops the server.
+  // The handler also swallows a late rejection nobody awaits.
+  void sharedStart
+    .catch(() => undefined)
+    .then(() => {
+      activeStartRequests.delete(currentRequest);
+    });
+  let onAbort: (() => void) | undefined;
   try {
-    const success = await inFlightStartPromise;
+    // Race the shared startup against this caller's own abort so a cancelled
+    // caller returns promptly while other callers keep waiting.
+    const success = await Promise.race([
+      sharedStart,
+      new Promise<false>((resolve) => {
+        if (!signal) return;
+        if (signal.aborted) return resolve(false);
+        onAbort = () => resolve(false);
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
     if (signal?.aborted) return false;
     return success;
   } finally {
-    activeStartRequests.delete(currentRequest);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
 }
 
