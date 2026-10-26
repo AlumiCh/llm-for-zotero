@@ -16,6 +16,7 @@ import type {
   WebSearchResponse,
   WebSourceRecord,
 } from "./types";
+import { normalizePageText } from "./pageText";
 
 const ORIGIN = "https://api.anysearch.com";
 const TIMEOUT_MS = 60_000;
@@ -66,7 +67,11 @@ function serviceError(status: number): WebAccessError {
   }
 }
 
-function source(value: unknown, extracted: boolean): WebSourceRecord {
+function source(
+  value: unknown,
+  extracted: boolean,
+  wholePage = false,
+): WebSourceRecord {
   const entry = record(value);
   const url = normalizePublicWebUrl(entry.url);
   const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
@@ -81,6 +86,18 @@ function source(value: unknown, extracted: boolean): WebSourceRecord {
       "AnySearch returned incomplete result fields.",
       "service",
     );
+  }
+  if (extracted && wholePage && content !== undefined) {
+    const page = normalizePageText(content);
+    return {
+      sourceId: buildWebSourceId(url),
+      url,
+      hostname,
+      organization: hostname,
+      title: entry.title.replace(/\s+/g, " ").trim().slice(0, 500) || hostname,
+      content: page.text,
+      ...(page.truncated ? { truncated: true } : {}),
+    };
   }
   return {
     sourceId: buildWebSourceId(url),
@@ -316,7 +333,7 @@ export class AnysearchClient implements WebAccessProvider {
             { url },
             request.signal,
           );
-          const page = source(result.data, true);
+          const page = source(result.data, true, request.wholePage);
           // Do not let an unexpected response URL acquire a searched source ID.
           if (page.url !== url) {
             throw new WebAccessError(

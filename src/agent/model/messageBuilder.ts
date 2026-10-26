@@ -204,6 +204,7 @@ function buildFullUserMessage(
   options: {
     priorReadBlock?: string;
     coverageBlock?: string;
+    earlierSourcesBlock?: string;
     turnGuidanceBlock?: string;
     contentInputs?: AgentContentInputCapabilities;
   } = {},
@@ -347,6 +348,9 @@ function buildFullUserMessage(
   if (options.coverageBlock) {
     contextLines.push(options.coverageBlock);
   }
+  if (options.earlierSourcesBlock) {
+    contextLines.push(options.earlierSourcesBlock);
+  }
   if (request.clarificationHistory?.length) {
     contextLines.push(
       [
@@ -423,6 +427,7 @@ function buildUserMessage(
   resourceContextPlan?: AgentResourceContextPlan,
   options: {
     coverageBlock?: string;
+    earlierSourcesBlock?: string;
     turnGuidanceBlock?: string;
     contentInputs?: AgentContentInputCapabilities;
   } = {},
@@ -430,6 +435,7 @@ function buildUserMessage(
   return buildFullUserMessage(request, {
     priorReadBlock: resourceContextPlan?.priorReadBlock,
     coverageBlock: options.coverageBlock,
+    earlierSourcesBlock: options.earlierSourcesBlock,
     turnGuidanceBlock: options.turnGuidanceBlock,
     contentInputs: options.contentInputs,
   });
@@ -623,6 +629,8 @@ export async function renderAgentPromptEnvelope(
   resourceContextPlan?: AgentResourceContextPlan,
   options: {
     contentInputs?: AgentContentInputCapabilities;
+    /** Outside sources earlier questions of this chat found (follow-ups). */
+    earlierSourcesBlock?: string;
   } = {},
 ): Promise<RenderedAgentPromptEnvelope> {
   const continuityNotes = await loadAgentTurnMemory(request.conversationKey);
@@ -755,6 +763,7 @@ export async function renderAgentPromptEnvelope(
   );
   const turnMessage = buildUserMessage(request, resourceContextPlan, {
     coverageBlock,
+    earlierSourcesBlock: options.earlierSourcesBlock,
     turnGuidanceBlock,
     contentInputs: options.contentInputs,
   });

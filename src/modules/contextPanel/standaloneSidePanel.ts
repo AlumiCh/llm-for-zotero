@@ -101,6 +101,9 @@ import {
   moveSidePanelTab,
   openItemSidePanelTab,
   openMiscSidePanelTab,
+  openTaskProgressSidePanelTab,
+  openWebSourcesSidePanelTab,
+  hasTaskProgressSidePanelTab,
   returnItemTabToMisc,
   returnReadOnlyTabToHistory,
   openReadOnlySidePanelTab,
@@ -149,6 +152,38 @@ import { flushPendingChatRender } from "./progressiveChatRender";
 import { renderRenderedMarkdownInto } from "./renderedMarkdown";
 import { renderSavedFileInto, savedFilePreviewKind } from "./savedFileCards";
 import { revealLocalPath } from "../../utils/revealLocalPath";
+import { resolveMineruHint } from "./taskProgress/mineruHint";
+import {
+  getTaskProgressPanelInput,
+  registerTaskProgressDock,
+  syncTaskProgressPanel,
+} from "./taskProgress/panel";
+import {
+  displayedTaskRunState,
+  getTaskProgress,
+  subscribeTaskProgress,
+} from "./taskProgress/store";
+import {
+  TASK_PROGRESS_OPEN_PASSAGE_EVENT,
+  TASK_PROGRESS_REMOVE_PAPER_EVENT,
+  createTaskProgressCard,
+  mountTaskProgressView,
+  type TaskProgressView,
+  type TaskProgressViewInput,
+} from "./taskProgress/view";
+import { listAgentRunEventsForRuns } from "../../agent/store/traceStore";
+import { getAgentToolResultHandle } from "../../agent/store/toolResultHandles";
+import {
+  buildWebSourceGroups,
+  WEB_SOURCE_EVENT_TYPES,
+  type WebSourceQuestionGroup,
+} from "./webSourcesData";
+import { mountWebSourcesTab, type WebSourcesTabView } from "./webSourcesTab";
+import {
+  registerSidePanelWebHost,
+  unregisterSidePanelWebHost,
+  type SidePanelWebHost,
+} from "./webSourcesSidePanel";
 import {
   buildItemFenceMarkdown,
   canRunItemAgain,
@@ -323,7 +358,26 @@ type MiscTabView = TabViewBase & {
   stopWatching: () => void;
 };
 
+type TaskProgressTabView = TabViewBase & {
+  kind: "progress";
+  /** The docked Task progress view (row as heading, drawer always open). */
+  view: TaskProgressView;
+  /** Points the view at the main chat's conversation. */
+  setInput: (input: TaskProgressViewInput) => void;
+  /** Stops following the run's state (the tab's icon). */
+  stopWatching: () => void;
+};
+
+type WebSourcesTabViewEntry = TabViewBase & {
+  kind: "web";
+  /** The list and page views (webSourcesTab.ts). */
+  web: WebSourcesTabView;
+  /** Stops watching the main chat. */
+  stopWatching: () => void;
+};
+
 type TabView =
+  | WebSourcesTabViewEntry
   | ReadOnlyTabView
   | SideChatTabView
   | HistoryTabView
@@ -390,12 +444,21 @@ export function createStandaloneSidePanel(
     sideChatRow: HTMLButtonElement;
     historyRow: HTMLButtonElement;
     miscRow: HTMLButtonElement;
+    progressRow: HTMLButtonElement;
+    webRow: HTMLButtonElement;
   } | null = null;
   let panelConfirm: HTMLElement | null = null;
   let disposed = false;
 
   const nextTabId = (
-    kind: "readonly" | "sidechat" | "history" | "item" | "misc",
+    kind:
+      | "readonly"
+      | "sidechat"
+      | "history"
+      | "item"
+      | "misc"
+      | "progress"
+      | "web",
   ) => `${kind}-${++tabSequence}`;
 
   // -- Toggle (tab row, trailing slot) --------------------------------------
@@ -772,7 +835,14 @@ export function createStandaloneSidePanel(
   // -- Tabs in the strip ------------------------------------------------------
   const createTab = (
     id: string,
-    kind: "readonly" | "sidechat" | "history" | "item" | "misc",
+    kind:
+      | "readonly"
+      | "sidechat"
+      | "history"
+      | "item"
+      | "misc"
+      | "progress"
+      | "web",
     title: string,
     iconClass?: string,
   ) => {
@@ -907,7 +977,7 @@ export function createStandaloneSidePanel(
   // Two nav rows, in the window's nav-row style: "Side chat" opens a new
   // side chat tab; "History" turns this tab into the History tab.
   const createLaunchRow = (
-    kind: "sidechat" | "history" | "misc",
+    kind: "sidechat" | "history" | "misc" | "progress" | "web",
     iconClass: string,
     label: string,
     hint: string,
@@ -977,11 +1047,34 @@ export function createStandaloneSidePanel(
       t("View what the model made in these chats"),
     );
     miscRow.addEventListener("click", () => openMiscTab());
-    nav.append(sideChatRow, historyRow, miscRow);
+    const progressRow = createLaunchRow(
+      "progress",
+      "llm-standalone-side-panel-icon-task-progress",
+      t("Task progress"),
+      t("Steps and papers the agent works through"),
+    );
+    progressRow.addEventListener("click", () => openTaskProgressTab());
+    const webRow = createLaunchRow(
+      "web",
+      "llm-standalone-side-panel-icon-web-sources",
+      t("Web sources"),
+      t("Web pages the agent found in this chat"),
+    );
+    webRow.addEventListener("click", () =>
+      openWebSourcesTab((web) => web.showList([])),
+    );
+    nav.append(sideChatRow, historyRow, miscRow, progressRow, webRow);
     startPage.appendChild(nav);
     root.appendChild(startPage);
     viewHost.appendChild(root);
-    newTabPage = { root, sideChatRow, historyRow, miscRow };
+    newTabPage = {
+      root,
+      sideChatRow,
+      historyRow,
+      miscRow,
+      progressRow,
+      webRow,
+    };
     return newTabPage;
   };
   const destroyNewTabPage = () => {
@@ -2510,6 +2603,310 @@ export function createStandaloneSidePanel(
     }
     setTabsState(result.state);
   };
+  // -- Web sources tab ----------------------------------------------------------
+  // Every web page the main chat's agent runs found, and the page itself or
+  // the text the agent got for it (webSourcesTab.ts). One tab: markers and
+  // links in the chat open their pages in it.
+  const loadMainChatWebSources = async (): Promise<
+    WebSourceQuestionGroup[]
+  > => {
+    const key = deps.getMainContext().conversationKey;
+    const messages = chatHistory.get(key) || [];
+    const runIds = [
+      ...new Set(
+        messages
+          .filter((message) => message.role === "assistant")
+          .map((message) => String(message.agentRunId || "").trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (!runIds.length) return [];
+    const events = await listAgentRunEventsForRuns(
+      runIds,
+      WEB_SOURCE_EVENT_TYPES,
+    );
+    // A result too big for the trace is kept whole under its trh_ handle.
+    await Promise.all(
+      events.map(async (event) => {
+        const payload = event.payload;
+        if (payload?.type !== "tool_result" || !payload.toolResultHandle)
+          return;
+        if (payload.name !== "web_search" && payload.name !== "web_read")
+          return;
+        try {
+          const stored = await getAgentToolResultHandle({
+            conversationKey: key,
+            handle: payload.toolResultHandle,
+          });
+          if (stored) event.payload = { ...payload, content: stored.content };
+        } catch (err) {
+          appLogger.warn("LLM: web tool result could not be read", err);
+        }
+      }),
+    );
+    const byRun = new Map<string, typeof events>();
+    for (const event of events) {
+      const list = byRun.get(event.runId) || [];
+      list.push(event);
+      byRun.set(event.runId, list);
+    }
+    return buildWebSourceGroups(messages, byRun);
+  };
+  const buildWebSourcesView = (id: string): WebSourcesTabViewEntry => {
+    const web = mountWebSourcesTab({
+      doc,
+      win,
+      createTitleRow,
+      createIconButton: (iconClass, label) =>
+        createIconButton(doc, iconClass, label),
+      createPill: (label) => createPill(label, "kind"),
+      loadGroups: loadMainChatWebSources,
+      copyText: (text) => copyTextToClipboard(mainBody, text),
+    });
+    web.root.dataset.sideTabId = id;
+    viewHost.appendChild(web.root);
+    // New answers in the main chat can bring new pages: read again.
+    let timer: number | null = null;
+    const MutationObserverCtor = (
+      win as unknown as { MutationObserver?: typeof MutationObserver }
+    ).MutationObserver;
+    const observer = MutationObserverCtor
+      ? new MutationObserverCtor(() => {
+          if (timer !== null) win.clearTimeout(timer);
+          timer = win.setTimeout(() => {
+            timer = null;
+            web.reloadQuietly();
+          }, 600);
+        })
+      : null;
+    observer?.observe(mainBody, { childList: true, subtree: true });
+    const { tab, tabTitle } = createTab(
+      id,
+      "web",
+      t("Web sources"),
+      "llm-standalone-side-panel-icon-web-sources",
+    );
+    return {
+      kind: "web",
+      id,
+      root: web.root,
+      body: web.root,
+      tab,
+      tabTitle,
+      confirm: null,
+      disposed: false,
+      web,
+      stopWatching: () => {
+        observer?.disconnect();
+        if (timer !== null) win.clearTimeout(timer);
+        timer = null;
+      },
+    };
+  };
+  const disposeWebSourcesView = (view: WebSourcesTabViewEntry) => {
+    if (view.disposed) return;
+    view.disposed = true;
+    view.stopWatching();
+    view.web.dispose();
+    view.tab.remove();
+  };
+  /** Opens (or focuses) the Web sources tab, then shows what `show` asks. */
+  const openWebSourcesTab = (show: (web: WebSourcesTabView) => void) => {
+    if (disposed) return;
+    const result = openWebSourcesSidePanelTab(
+      openSidePanel(tabsState),
+      nextTabId("web"),
+    );
+    if (result.refused || !result.tabId) {
+      reportTabLimit();
+      return;
+    }
+    if (result.opened) {
+      views.set(result.tabId, buildWebSourcesView(result.tabId));
+    }
+    const view = views.get(result.tabId);
+    setTabsState(result.state);
+    if (view?.kind === "web") show(view.web);
+  };
+  const webHost: SidePanelWebHost = {
+    openSources: (highlightUrls) =>
+      openWebSourcesTab((web) => web.showList(highlightUrls)),
+    openPage: (link) => openWebSourcesTab((web) => web.showPage(link)),
+  };
+  registerSidePanelWebHost(doc, webHost);
+
+  // -- Task progress tab --------------------------------------------------------
+  // The main chat's Task progress, docked: the chat's own card (row and
+  // drawer), flat, with the drawer always open and filling the tab. It follows
+  // the main chat's conversation; the run's state shows on the tab's icon.
+  const buildTaskProgressView = (id: string): TaskProgressTabView => {
+    const root = createElement(
+      doc,
+      "div",
+      "llm-standalone-side-panel-task-progress",
+    );
+    root.dataset.sideView = "progress";
+    root.dataset.sideTabId = id;
+    const card = createTaskProgressCard(doc);
+    card.classList.add("llm-task-progress-docked");
+    const row = card.querySelector(".llm-task-progress") as HTMLButtonElement;
+    const drawer = card.querySelector(
+      ".llm-task-progress-drawer",
+    ) as HTMLElement;
+    // The ids belong to the main chat's own card.
+    row.removeAttribute("id");
+    row.removeAttribute("aria-controls");
+    drawer.removeAttribute("id");
+    row.tabIndex = -1;
+    const back = createElement(
+      doc,
+      "button",
+      "llm-task-progress-move llm-task-progress-back",
+      { type: "button" },
+    );
+    setButtonLabel(back, t("Move back to chat"));
+    back.addEventListener("click", () => moveTaskProgressToChat());
+    card.insertBefore(back, row.nextSibling);
+    card.dataset.movable = "true";
+    root.appendChild(card);
+    // The question list sizes its text as the chat does.
+    applyPanelFontScale(root);
+    // A passage to open, or a paper to remove, is the main chat's to handle.
+    const forward = (event: Event) => {
+      event.stopPropagation();
+      const CustomEventCtor = (
+        win as unknown as { CustomEvent: typeof CustomEvent }
+      ).CustomEvent;
+      mainBody.dispatchEvent(
+        new CustomEventCtor(event.type, {
+          bubbles: true,
+          detail: (event as CustomEvent).detail,
+        }),
+      );
+    };
+    root.addEventListener(TASK_PROGRESS_OPEN_PASSAGE_EVENT, forward);
+    root.addEventListener(TASK_PROGRESS_REMOVE_PAPER_EVENT, forward);
+    const progressView = mountTaskProgressView({
+      doc,
+      row,
+      drawer,
+      shell: root,
+      chatBox: root,
+      keyTarget: root,
+      docked: true,
+      deps: {
+        setTimeout: (callback, ms) => win.setTimeout(callback, ms),
+        clearTimeout: (handle) => win.clearTimeout(handle as number),
+        now: () => win.performance?.now?.() ?? Date.now(),
+        resolveMineru: resolveMineruHint,
+      },
+    });
+    const { tab, tabTitle } = createTab(
+      id,
+      "progress",
+      t("Task progress"),
+      "llm-standalone-side-panel-icon-task-progress",
+    );
+    const icon = tab.querySelector(
+      ".llm-standalone-side-panel-tab-icon",
+    ) as HTMLElement | null;
+    let conversationKey: number | null = null;
+    const paintIcon = () => {
+      if (!icon) return;
+      const state = displayedTaskRunState(
+        conversationKey ? getTaskProgress(conversationKey) : null,
+      );
+      if (icon.dataset.taskState !== state) icon.dataset.taskState = state;
+    };
+    const unsubscribe = subscribeTaskProgress((key) => {
+      if (key === conversationKey) paintIcon();
+    });
+    const view: TaskProgressTabView = {
+      kind: "progress",
+      id,
+      root,
+      body: root,
+      tab,
+      tabTitle,
+      confirm: null,
+      disposed: false,
+      view: progressView,
+      setInput: (input) => {
+        if (view.disposed) return;
+        conversationKey = input.conversationKey;
+        progressView.setInput(input);
+        paintIcon();
+      },
+      stopWatching: () => {
+        unsubscribe();
+        root.removeEventListener(TASK_PROGRESS_OPEN_PASSAGE_EVENT, forward);
+        root.removeEventListener(TASK_PROGRESS_REMOVE_PAPER_EVENT, forward);
+      },
+    };
+    const input = getTaskProgressPanelInput(mainBody);
+    if (input) view.setInput(input);
+    viewHost.appendChild(root);
+    return view;
+  };
+  const disposeTaskProgressView = (view: TaskProgressTabView) => {
+    if (view.disposed) return;
+    view.disposed = true;
+    view.stopWatching();
+    view.view.dispose();
+    view.root.remove();
+    view.tab.remove();
+  };
+  /** The →| button, the New tab row and the title bar button while docked. */
+  const openTaskProgressTab = () => {
+    if (disposed) return;
+    const result = openTaskProgressSidePanelTab(
+      openSidePanel(tabsState),
+      nextTabId("progress"),
+    );
+    if (result.refused) {
+      reportTabLimit();
+      return;
+    }
+    if (result.opened && result.tabId) {
+      views.set(result.tabId, buildTaskProgressView(result.tabId));
+    }
+    setTabsState(result.state);
+  };
+  const taskProgressViews = () =>
+    [...views.values()].filter(
+      (view): view is TaskProgressTabView => view.kind === "progress",
+    );
+  /**
+   * |← in the tab, or the title bar's Task progress button: the tab closes
+   * and the row is back in the chat. The panel closes with it when it held
+   * nothing else.
+   */
+  const moveTaskProgressToChat = () => {
+    const tab = tabsState.tabs.find((entry) => entry.kind === "progress");
+    if (!tab || disposed) return;
+    if (tabsState.tabs.length === 1 && !tabsState.newTabOpen) {
+      closePanelNow();
+      return;
+    }
+    closeTabNow(tab.id);
+  };
+  /** The main chat's row hides while the tab is open, and comes back after. */
+  let lastDocked = false;
+  const syncTaskProgressDock = () => {
+    const docked = !disposed && hasTaskProgressSidePanelTab(tabsState);
+    if (docked === lastDocked) return;
+    lastDocked = docked;
+    syncTaskProgressPanel(mainBody);
+  };
+  const unregisterTaskProgressDock = registerTaskProgressDock(mainBody, {
+    isDocked: () => !disposed && hasTaskProgressSidePanelTab(tabsState),
+    open: openTaskProgressTab,
+    close: moveTaskProgressToChat,
+    onInput: (input) => {
+      for (const view of taskProgressViews()) view.setInput(input);
+    },
+  });
+
   const itemHost: SidePanelItemHost = {
     open: (request) => void openItem(request),
   };
@@ -2622,6 +3019,8 @@ export function createStandaloneSidePanel(
     else if (view.kind === "history") disposeHistoryView(view);
     else if (view.kind === "item") disposeItemView(view);
     else if (view.kind === "misc") disposeMiscView(view);
+    else if (view.kind === "progress") disposeTaskProgressView(view);
+    else if (view.kind === "web") disposeWebSourcesView(view);
     else disposeReadOnlyView(view);
   };
 
@@ -2765,6 +3164,10 @@ export function createStandaloneSidePanel(
         full && !tabsState.tabs.some((tab) => tab.kind === "history");
       page.miscRow.disabled =
         full && !tabsState.tabs.some((tab) => tab.kind === "misc");
+      page.progressRow.disabled =
+        full && !tabsState.tabs.some((tab) => tab.kind === "progress");
+      page.webRow.disabled =
+        full && !tabsState.tabs.some((tab) => tab.kind === "web");
     } else if (newTabPage) {
       newTabPage.root.hidden = true;
     }
@@ -3010,6 +3413,7 @@ export function createStandaloneSidePanel(
       if (isOpen()) historyView(tabsState.activeId)?.list.refresh();
       for (const view of views.values()) {
         if (view.kind === "misc") view.refresh();
+        if (view.kind === "web") view.web.refresh();
       }
     },
     openItem: (request) => void openItem(request),
@@ -3044,6 +3448,7 @@ export function createStandaloneSidePanel(
       for (const key of [...stashedWorkspaces.keys()]) dropWorkspace(key);
       disposed = true;
       unregisterSidePanelItemHost(doc, itemHost);
+      unregisterSidePanelWebHost(doc, webHost);
       scanHost?.remove();
       madeItemScans.clear();
       resize.dispose();

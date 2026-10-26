@@ -16,6 +16,7 @@ import type {
   WebSearchResponse,
   WebSourceRecord,
 } from "./types";
+import { normalizePageText } from "./pageText";
 
 const TIMEOUT_MS = 60_000;
 const CONTENT_LIMIT = 12_000;
@@ -332,6 +333,7 @@ export class DeepSeekSearchClient implements WebAccessProvider {
   private async fetchPage(
     url: string,
     signal?: AbortSignal,
+    wholePage = false,
   ): Promise<WebSourceRecord> {
     const data = await this.request("fetch", { url }, signal);
     if (typeof data.content !== "string" || !data.content.trim()) {
@@ -339,6 +341,18 @@ export class DeepSeekSearchClient implements WebAccessProvider {
     }
     // Fetch returns no URL, so the requested URL keeps its searched source ID.
     const hostname = hostnameOf(url);
+    if (wholePage) {
+      const page = normalizePageText(data.content);
+      return {
+        sourceId: buildWebSourceId(url),
+        url,
+        hostname,
+        organization: hostname,
+        title: text(data.title, 500) || hostname,
+        content: page.text,
+        ...(page.truncated ? { truncated: true } : {}),
+      };
+    }
     return {
       sourceId: buildWebSourceId(url),
       url,
@@ -391,7 +405,11 @@ export class DeepSeekSearchClient implements WebAccessProvider {
           continue;
         }
         try {
-          pages[index] = await this.fetchPage(url, request.signal);
+          pages[index] = await this.fetchPage(
+            url,
+            request.signal,
+            request.wholePage,
+          );
         } catch (error) {
           if (request.signal?.aborted)
             throw new WebAccessError(

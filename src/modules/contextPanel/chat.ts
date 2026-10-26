@@ -459,6 +459,7 @@ import { getCoreAgentRuntime, initAgentSubsystem } from "../../agent/index";
 import {
   appendAgentRunEventAfterLatest,
   getAgentRunTrace,
+  listAgentRunEventsForRuns,
 } from "../../agent/store/traceStore";
 import { deliverPendingPlanDocumentMessage } from "../../agent/documents/publication";
 import { materialRefFromDocument } from "../../agent/documents/workflowMaterial";
@@ -574,6 +575,7 @@ export function setAgentRunTraceLoaderForTests(
   loader?: AgentRunTraceLoader,
 ): void {
   agentRunTraceLoader = loader || getAgentRunTrace;
+  webSourceAnchorsByRun.clear();
   if (!loader) {
     agentRunTraceCache.clear();
     agentRunTraceLoadingTasks.clear();
@@ -1487,6 +1489,7 @@ export function buildAssistantResponseActionTarget(params: {
       ? webSourceAnchors.map((anchor) => ({
           offset: anchor.offset,
           sources: anchor.sources.map((source) => ({ ...source })),
+          ...(anchor.placement ? { placement: anchor.placement } : {}),
         }))
       : undefined,
     agentRunId: message.agentRunId,
@@ -3295,6 +3298,85 @@ export function ensureAgentRunTraceLoadedForTests(
   item: Zotero.Item,
 ): Promise<void> {
   return ensureAgentRunTraceLoaded(runId, body, item);
+}
+
+/**
+ * Each run's web markers, read ahead of its full trace: an old chat's answers
+ * show their markers after one small read of the runs' final events, not
+ * after every full trace (tool results and all) has loaded.
+ */
+const webSourceAnchorsByRun = new Map<string, WebSourceAnchor[]>();
+const webSourceAnchorPreloads = new Set<string>();
+
+/** The answer's web markers: from its trace, else from the read-ahead. */
+function getMessageWebSourceAnchors(
+  message: Message,
+  traceEvents: readonly AgentRunEventRecord[],
+): WebSourceAnchor[] {
+  const fromTrace = getWebSourceAnchorsFromTrace(traceEvents);
+  const runId = message.agentRunId?.trim();
+  if (fromTrace.length || !runId || agentRunTraceCache.has(runId)) {
+    return fromTrace;
+  }
+  return webSourceAnchorsByRun.get(runId) || [];
+}
+
+function preloadWebSourceAnchors(
+  body: Element,
+  item: Zotero.Item,
+  history: readonly Message[],
+): void {
+  // Tests that stand in their own trace loader have no store to read ahead.
+  if (agentRunTraceLoader !== getAgentRunTrace) return;
+  const runIds = Array.from(
+    new Set(
+      history
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.agentRunId?.trim() || "")
+        .filter(
+          (runId) =>
+            runId &&
+            !agentRunTraceCache.has(runId) &&
+            !webSourceAnchorsByRun.has(runId) &&
+            !webSourceAnchorPreloads.has(runId),
+        ),
+    ),
+  );
+  if (!runIds.length) return;
+  const conversationKey = getConversationKey(item);
+  const isFrozen = () =>
+    pendingDeletionStore.isConversationPendingDeletion(conversationKey) ||
+    areConversationWritesFrozen(conversationKey);
+  for (const runId of runIds) webSourceAnchorPreloads.add(runId);
+  void (async () => {
+    try {
+      const events = await listAgentRunEventsForRuns(runIds, ["final"]);
+      const eventsByRun = new Map<string, AgentRunEventRecord[]>();
+      for (const event of events) {
+        const runEvents = eventsByRun.get(event.runId) || [];
+        runEvents.push(event);
+        eventsByRun.set(event.runId, runEvents);
+      }
+      const shown: string[] = [];
+      for (const runId of runIds) {
+        const anchors = getWebSourceAnchorsFromTrace(
+          eventsByRun.get(runId) || [],
+        );
+        webSourceAnchorsByRun.set(runId, anchors);
+        if (anchors.length && !agentRunTraceCache.has(runId)) {
+          shown.push(runId);
+        }
+      }
+      if (isFrozen()) return;
+      for (const runId of shown) {
+        void refreshLoadedTraceMessages(runId, body, item, isFrozen);
+      }
+    } catch (err) {
+      appLogger.warn("LLM: Failed to read web markers ahead", err);
+    } finally {
+      for (const runId of runIds) webSourceAnchorPreloads.delete(runId);
+    }
+  })();
 }
 
 function getCachedAgentRunEvents(
@@ -10389,6 +10471,8 @@ type MountedAssistantView = {
   text: string;
   quoteCitations?: Message["quoteCitations"];
   quoteOverride?: Message["quoteDisplayOverride"];
+  /** The web markers the answer was drawn with (see webSourceAnchorsKey). */
+  webSourceAnchorsKey: string;
   answer?: HTMLElement;
   streaming?: boolean;
   documentId?: string;
@@ -10536,6 +10620,22 @@ export const createReasoningPanelForTests = createReasoningPanel;
 export const renderReasoningPartForTests = renderReasoningPart;
 export const disposeMountedAssistantViewForTests = disposeMountedAssistantView;
 
+/**
+ * What the answer's web markers depend on. An old chat's answers are drawn
+ * before their run traces load, so the markers arrive later with the same
+ * answer text: this tells an in-place refresh to redraw the answer then.
+ */
+function webSourceAnchorsKey(anchors: readonly WebSourceAnchor[]): string {
+  return anchors
+    .map(
+      (anchor) =>
+        `${anchor.offset}:${anchor.placement || ""}:${anchor.sources
+          .map((source) => source.url)
+          .join(",")}`,
+    )
+    .join("|");
+}
+
 /** Text/activity refreshes never rebuild the conversation or restore its scroll snapshot. */
 function updateMountedAssistantViews(
   body: Element,
@@ -10569,9 +10669,13 @@ function updateMountedAssistantViews(
   }
   for (const message of messages) {
     const view = views.get(message)!;
-    const events = message.agentRunId
-      ? getCachedAgentRunEvents(message.agentRunId)
+    // As the full render: the live events stand in until the run is cached.
+    const cachedEvents = getCachedAgentRunEvents(message.agentRunId);
+    const events = cachedEvents.length
+      ? cachedEvents
       : message.pendingAgentTraceEvents || [];
+    const webSourceAnchors = getMessageWebSourceAnchors(message, events);
+    const anchorsKey = webSourceAnchorsKey(webSourceAnchors);
     let interleaved = false;
     if (view.trace) {
       const trace = renderAgentTrace({
@@ -10597,7 +10701,8 @@ function updateMountedAssistantViews(
     if (
       message.text !== view.text ||
       message.quoteCitations !== view.quoteCitations ||
-      message.quoteDisplayOverride !== view.quoteOverride
+      message.quoteDisplayOverride !== view.quoteOverride ||
+      anchorsKey !== view.webSourceAnchorsKey
     ) {
       const expandedQuoteCards = collectExpandedQuoteCardKeys(view.answer);
       if (!view.answer) {
@@ -10616,7 +10721,7 @@ function updateMountedAssistantViews(
         bubble: view.answer as HTMLDivElement,
         assistantMessage: message,
         pairedUserMessage: view.user,
-        webSourceAnchors: getWebSourceAnchorsFromTrace(events),
+        webSourceAnchors,
         incremental: true,
         onContentRendered: () =>
           scheduleChatScrollReconciliation(getConversationKey(item), box),
@@ -10625,6 +10730,7 @@ function updateMountedAssistantViews(
       view.text = message.text;
       view.quoteCitations = message.quoteCitations;
       view.quoteOverride = message.quoteDisplayOverride;
+      view.webSourceAnchorsKey = anchorsKey;
       updateStreamingTurnNavigator(body, message);
       if (message.text) {
         view.bubble.classList.toggle("streaming", Boolean(message.streaming));
@@ -10749,6 +10855,7 @@ function renderChatForPanel(
   // Turns queued for deletion stay in memory and DB until the undo window
   // closes; they are only hidden from the render.
   const history = filterMessagesInPendingTurns(conversationKey, rawHistory);
+  preloadWebSourceAnchors(body, item, history);
   const requestedRerenders = options.rerenderAssistantMessages;
   const renderedWrappers = requestedRerenders?.size
     ? (Array.from(chatBox.children) as HTMLElement[])
@@ -12041,7 +12148,7 @@ function renderChatForPanel(
       const traceEvents = cachedTraceEvents.length
         ? cachedTraceEvents
         : msg.pendingAgentTraceEvents || [];
-      const webSourceAnchors = getWebSourceAnchorsFromTrace(traceEvents);
+      const webSourceAnchors = getMessageWebSourceAnchors(msg, traceEvents);
       responseWebSourceAnchors = webSourceAnchors;
       let agentUsesInterleavedText = false;
       const actionSummaryHost = doc.createElement("div");
@@ -12203,6 +12310,7 @@ function renderChatForPanel(
           documentId: msg.documentId || msg.planDocumentId,
           quoteCitations: msg.quoteCitations,
           quoteOverride: msg.quoteDisplayOverride,
+          webSourceAnchorsKey: webSourceAnchorsKey(webSourceAnchors),
           reasoning: mountedReasoning,
         });
       }

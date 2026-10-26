@@ -581,7 +581,7 @@ describe("Original Agent run endings", function () {
     assertStoppedBy(ending, "incomplete_step_limit", "failed");
   });
 
-  it("final_gate_rejected: fails closed when the final gate rejects an answer it cannot correct", async function () {
+  it("final_answer: accepts an unmarked web answer instead of rejecting it", async function () {
     Zotero.Prefs.set(TAVILY_API_KEY_PREF, "tvly-test", true);
     const registry = new AgentToolRegistry();
     registry.register(createWebSearchTool(() => webProvider));
@@ -607,10 +607,50 @@ describe("Original Agent run endings", function () {
       }),
     });
 
+    const text = "First uncited claim.";
+    assert.equal(adapter.steps(), 2);
+    assert.deepInclude(ending.outcome, { kind: "completed", text });
+    // The run status the run was stored with, as for any accepted answer.
+    assert.notProperty(ending.outcome, "runStatus");
+    assert.equal(ending.run.status, "completed");
+    assert.equal(ending.run.finalText, text);
+    assertStoppedBy(ending, "final_answer", "completed");
+  });
+
+  it("final_gate_rejected: fails closed when an incomplete discovery is still unanswered after a correction", async function () {
+    const registry = new AgentToolRegistry();
+    registry.register({
+      spec: {
+        name: "literature_search",
+        description: "Search literature",
+        inputSchema: { type: "object" },
+        executionClass: "read",
+        requiresConfirmation: false,
+      },
+      validate: (() => ({ ok: true, value: {} })) as never,
+      execute: (async () => ({
+        reviewRequired: true,
+        sessionId: "discovery-1",
+        revision: 1,
+      })) as never,
+    });
+    const search: AgentToolCall = {
+      id: "lit-call-1",
+      name: "literature_search",
+      arguments: {},
+    };
+    const adapter = scriptedAdapter((step) =>
+      step === 1 ? toolStep([search]) : finalStep(`Prose answer ${step}.`),
+    );
+    const ending = await runToEnding(installed, {
+      registry,
+      adapter,
+      request: baseRequest(97_320, "Find more papers"),
+    });
+
     const text =
-      "I used web access for this task, but could not safely attach valid paragraph-level sources to the answer.";
+      "The relevant-paper shortlist was not presented for review, so discovery is not complete.";
     assert.equal(adapter.steps(), 3);
-    // It answered, so it completed; the run was stored as failed.
     assert.deepInclude(ending.outcome, {
       kind: "completed",
       text,

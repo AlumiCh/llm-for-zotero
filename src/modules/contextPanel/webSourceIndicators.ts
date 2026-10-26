@@ -3,6 +3,14 @@ import type { WebSourceAnchor } from "../../webAccess/types";
 import { normalizePublicWebUrl } from "../../webAccess/tavilyClient";
 import { t } from "../../utils/i18n";
 import { createWebFaviconImage, normalizeWebFaviconUrl } from "./webFavicon";
+import {
+  getSidePanelWebHost,
+  openWebSourceLink,
+  wantsDefaultBrowser,
+} from "./webSourcesSidePanel";
+
+/** The marker shows at most this many site icons; "+N" counts the rest. */
+export const WEB_SOURCE_MARKER_MAX_ICONS = 3;
 
 const ANCHOR_TOKEN_PREFIX = "LLMWEBSOURCEANCHOR";
 
@@ -31,27 +39,89 @@ function preserveAnchorParagraphBoundary(markdownAfterAnchor: string): string {
   return `\n${markdownAfterAnchor}`;
 }
 
+/** The fence still open at the end of the markdown, if any. */
+function openCodeFence(markdown: string): string | null {
+  let fence: { character: "`" | "~"; length: number } | null = null;
+  for (const line of markdown.split("\n")) {
+    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    if (!fenceMatch) continue;
+    const token = fenceMatch[1];
+    const character = token[0] as "`" | "~";
+    if (!fence) fence = { character, length: token.length };
+    else if (fence.character === character && token.length >= fence.length) {
+      fence = null;
+    }
+  }
+  return fence ? fence.character.repeat(fence.length) : null;
+}
+
+/**
+ * The end chip is a paragraph of its own after the answer, before any host
+ * notes. A code fence the answer left open is closed for display first.
+ */
+function insertEndAnchorToken(
+  markdown: string,
+  offset: number,
+  token: string,
+): string {
+  const before = markdown.slice(0, offset).trimEnd();
+  const after = markdown.slice(offset).trimStart();
+  const fence = openCodeFence(before);
+  const closedBefore = fence ? `${before}\n${fence}` : before;
+  return `${closedBefore ? `${closedBefore}\n\n` : ""}${token}${after ? `\n\n${after}` : ""}`;
+}
+
+// A token glued to a bare URL would become part of its link.
+const BARE_URL_AT_END_PATTERN = /(?<!\]\()https?:\/\/[^\s<>]+$/;
+
 export function injectWebSourceAnchorTokens(
   markdown: string,
   anchors: readonly WebSourceAnchor[],
 ): string {
   let result = markdown;
   const sorted = anchors
-    .map((anchor, index) => ({ anchor, index }))
+    .map((anchor, index) => ({
+      anchor,
+      index,
+      // A trimmed stored text can be shorter than the end chip's offset; the
+      // chip still belongs at the end.
+      offset:
+        anchor.placement === "end"
+          ? Math.min(anchor.offset, markdown.length)
+          : anchor.offset,
+    }))
     .filter(
-      ({ anchor }) =>
-        Number.isInteger(anchor.offset) &&
-        anchor.offset >= 0 &&
-        anchor.offset <= markdown.length &&
+      ({ anchor, offset }) =>
+        Number.isInteger(offset) &&
+        offset >= 0 &&
+        offset <= markdown.length &&
         anchor.sources.length > 0,
     )
-    .sort((left, right) => right.anchor.offset - left.anchor.offset);
-  for (const { anchor, index } of sorted) {
-    result = `${result.slice(0, anchor.offset)}${anchorToken(index)}${preserveAnchorParagraphBoundary(
-      result.slice(anchor.offset),
-    )}`;
+    // Later offsets first; at one offset the end chip goes in first, so a
+    // paragraph chip there stays on its paragraph.
+    .sort(
+      (left, right) =>
+        right.offset - left.offset ||
+        Number(right.anchor.placement === "end") -
+          Number(left.anchor.placement === "end"),
+    );
+  for (const { anchor, index, offset } of sorted) {
+    result =
+      anchor.placement === "end"
+        ? insertEndAnchorToken(result, offset, anchorToken(index))
+        : `${result.slice(0, offset)}${
+            BARE_URL_AT_END_PATTERN.test(result.slice(0, offset)) ? " " : ""
+          }${anchorToken(index)}${preserveAnchorParagraphBoundary(
+            result.slice(offset),
+          )}`;
   }
   return result;
+}
+
+function isMacRuntime(): boolean {
+  return Boolean(
+    (globalThis as { Zotero?: { isMac?: boolean } }).Zotero?.isMac,
+  );
 }
 
 function launchWebSource(url: string): void {
@@ -90,6 +160,51 @@ export function normalizeWebSourcePopoverRows(
   });
 }
 
+/**
+ * The marker's face: the first sites' icons, overlapping, and "+N" for the
+ * sites past WEB_SOURCE_MARKER_MAX_ICONS. A site without an icon (or whose
+ * icon fails to load) shows the globe in its place.
+ */
+export function buildWebSourceMarkerFace(
+  doc: Document,
+  sources: readonly Pick<WebSourcePopoverRow, "faviconUrl">[],
+): HTMLElement {
+  const face = doc.createElement("span");
+  face.className = "llm-web-source-marker";
+  face.setAttribute("aria-hidden", "true");
+  const stack = doc.createElement("span");
+  stack.className = "llm-web-source-marker-icons";
+  const shown = sources.slice(0, WEB_SOURCE_MARKER_MAX_ICONS);
+  shown.forEach((source, index) => {
+    const icon = doc.createElement("span");
+    icon.className = "llm-web-source-marker-icon";
+    // The first site sits on top.
+    icon.style.zIndex = String(shown.length - index);
+    const favicon = createWebFaviconImage(
+      doc,
+      source.faviconUrl,
+      "llm-web-source-marker-favicon",
+    );
+    if (favicon) {
+      icon.classList.add("llm-web-source-marker-icon-has-favicon");
+      favicon.addEventListener("error", () => {
+        icon.classList.remove("llm-web-source-marker-icon-has-favicon");
+      });
+      icon.appendChild(favicon);
+    }
+    stack.appendChild(icon);
+  });
+  face.appendChild(stack);
+  const more = sources.length - shown.length;
+  if (more > 0) {
+    const label = doc.createElement("span");
+    label.className = "llm-web-source-more";
+    label.textContent = `+${more}`;
+    face.appendChild(label);
+  }
+  return face;
+}
+
 function buildSourceIndicator(
   doc: Document,
   anchor: WebSourceAnchor,
@@ -97,12 +212,17 @@ function buildSourceIndicator(
   const sources = normalizeWebSourcePopoverRows(anchor);
   if (!sources.length) return null;
 
-  const globe = doc.createElement("span");
-  globe.className = "llm-web-source-globe";
-  globe.setAttribute("aria-hidden", "true");
   return createSourcePopover(doc, {
     label: t("View web sources"),
-    icon: globe,
+    icon: buildWebSourceMarkerFace(doc, sources),
+    chipClassName: "llm-web-source-chip-sites",
+    // In the standalone window the marker lists its pages in the side panel.
+    onChipClick: (event) => {
+      const host = getSidePanelWebHost(doc);
+      if (!host || wantsDefaultBrowser(event)) return false;
+      host.openSources(sources.map((source) => source.url));
+      return true;
+    },
     populate: (popover, close) => {
       for (const source of sources) {
         const row = doc.createElement("button");
@@ -142,14 +262,46 @@ function buildSourceIndicator(
         row.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          launchWebSource(source.url);
+          // The side panel when the window has one; ⌘-click and the Zotero
+          // sidebar open the default browser.
+          if (
+            !openWebSourceLink(
+              doc,
+              {
+                url: source.url,
+                title: source.title,
+                organization: source.organization,
+                faviconUrl: source.faviconUrl,
+              },
+              event,
+            )
+          ) {
+            launchWebSource(source.url);
+          }
           row.blur();
           close();
         });
         popover.appendChild(row);
       }
+      if (getSidePanelWebHost(doc)) {
+        const hint = doc.createElement("span");
+        hint.className = "llm-web-source-hint";
+        hint.textContent = t(
+          "Opens in the side panel · {key}-click opens your browser",
+        ).replace("{key}", isMacRuntime() ? "⌘" : "Ctrl");
+        popover.appendChild(hint);
+      }
     },
   });
+  indicator.classList.add("llm-web-source-indicator-sites");
+  indicator.dataset.sourceKeys = keys.join(" ");
+  if (runId) indicator.dataset.runId = runId;
+  // Task progress's "Show in answer" finds a quote's own marker by it.
+  indicator.dataset.anchorIndex = String(anchorIndex);
+  if (anchor.placement === "end") indicator.dataset.placement = "end";
+  if (anchor.placement === "inline")
+    indicator.classList.add("llm-web-source-indicator-inline");
+  return indicator;
 }
 
 export function decorateWebSourceIndicators(

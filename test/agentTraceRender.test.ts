@@ -6,6 +6,7 @@ import { createRunCommandTool } from "../src/agent/tools/write/runCommand";
 import { setAgentToolPresentationResolverForTests } from "../src/modules/contextPanel/agentTrace/toolPresentation";
 import type { AgentConfirmationResolution } from "../src/agent/types";
 import { readFileSync } from "node:fs";
+import type { Message } from "../src/modules/contextPanel/types";
 import {
   buildAgentTraceChipDetails,
   buildAgentTraceDisplayItems,
@@ -13057,5 +13058,85 @@ describe("selectFigureStripImages", function () {
       kept.map((image) => image.id),
       ["3"],
     );
+  });
+});
+
+describe("web source markers in trace reasoning", function () {
+  const message = (streaming: boolean): Message => ({
+    role: "assistant",
+    text: "",
+    timestamp: 1,
+    runMode: "agent",
+    streaming,
+  });
+  const reasoningEvent = (
+    summary: string,
+    seq: number,
+  ): AgentRunEventRecord => ({
+    runId: "web-marker-reasoning",
+    seq,
+    eventType: "reasoning",
+    payload: { type: "reasoning", round: 1, summary },
+    createdAt: seq,
+  });
+  const reasoningTextOf = (trace: unknown): string =>
+    (trace as FakeElement).findByClass("llm-agent-reasoning-text")!.textContent;
+
+  it("hides web source markers in completed trace reasoning", function () {
+    const trace = renderAgentTrace({
+      doc: fakeDocument,
+      message: message(false),
+      events: [
+        reasoningEvent(
+          "Markers: append <!--llm-web-source:ID--> at end of each paragraph.",
+          1,
+        ),
+      ],
+    })!;
+    try {
+      const shown = reasoningTextOf(trace);
+      assert.notInclude(shown, "llm-web-source");
+      assert.include(shown, "Markers: append");
+      assert.include(shown, "at end of each paragraph.");
+    } finally {
+      disposeAgentTrace(trace);
+    }
+  });
+
+  it("never shows a partial web source marker while trace reasoning streams", function () {
+    const events = [reasoningEvent("Markers: append <!--llm-web", 1)];
+    const trace = renderAgentTrace({
+      doc: fakeDocument,
+      message: message(true),
+      events,
+    })!;
+    try {
+      assert.notInclude(reasoningTextOf(trace), "<!--");
+      events.push(reasoningEvent("-source:web_1--> at end.", 2));
+      renderAgentTrace({
+        doc: fakeDocument,
+        message: message(true),
+        events,
+        previous: trace,
+      });
+      const shown = reasoningTextOf(trace);
+      assert.notInclude(shown, "llm-web-source");
+      assert.include(shown, "at end.");
+    } finally {
+      disposeAgentTrace(trace);
+    }
+  });
+
+  it("keeps an ordinary HTML comment visible in trace reasoning", function () {
+    const trace = renderAgentTrace({
+      doc: fakeDocument,
+      message: message(false),
+      events: [reasoningEvent("Note to self: <!-- draft", 1)],
+    })!;
+    try {
+      assert.include(reasoningTextOf(trace), "<!-- draft");
+    } finally {
+      disposeAgentTrace(trace);
+    }
   });
 });

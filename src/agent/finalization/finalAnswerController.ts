@@ -5,6 +5,7 @@ import type {
 } from "../types";
 import {
   assessWebAttribution,
+  type SourceCatalog,
   type WebAttributionAssessment,
 } from "../../webAccess/attribution";
 import {
@@ -34,7 +35,6 @@ export type AgentFinalAnswerDecision =
   | {
       kind: "correct";
       correction: string;
-      assistantContent?: string;
     }
   | {
       kind: "fail";
@@ -59,7 +59,6 @@ const DISCOVERY_CHOICE = `Your answer was not shown: this turn ran a paper-findi
  * final response.
  */
 export class AgentFinalAnswerController {
-  private webAttributionCorrectionUsed = false;
   private readonly literatureReviewCorrections = new Set<string>();
   /** The ledger's progress when the last outcome correction was given. */
   private outcomeCorrectionSignature?: string;
@@ -72,7 +71,11 @@ export class AgentFinalAnswerController {
   /** The settled papers when the last outcome correction was given. */
   private outcomeCorrectionSettled = 0;
 
-  constructor(private readonly request: AgentRuntimeRequest) {}
+  constructor(
+    private readonly request: AgentRuntimeRequest,
+    /** Sources earlier questions found, which this answer may also mark. */
+    private readonly options: { earlierSources?: SourceCatalog } = {},
+  ) {}
 
   async evaluate(params: {
     candidateText: string;
@@ -165,25 +168,15 @@ export class AgentFinalAnswerController {
       }
     }
 
-    const webAttribution = assessWebAttribution(
-      params.candidateText,
-      params.toolExecutionRecords,
-    );
-    if (webAttribution.status !== "invalid") {
-      return { kind: "accept", webAttribution };
-    }
-    if (!this.webAttributionCorrectionUsed && params.canCorrect) {
-      this.webAttributionCorrectionUsed = true;
-      return {
-        kind: "correct",
-        correction: webAttribution.correctionPrompt,
-        assistantContent: webAttribution.cleanText,
-      };
-    }
+    // Web attribution never rejects an answer: sources it cannot place on
+    // a paragraph go on one chip at the end.
     return {
-      kind: "fail",
-      userMessage:
-        "I used web access for this task, but could not safely attach valid paragraph-level sources to the answer.",
+      kind: "accept",
+      webAttribution: assessWebAttribution(
+        params.candidateText,
+        params.toolExecutionRecords,
+        { earlier: this.options.earlierSources },
+      ),
     };
   }
 

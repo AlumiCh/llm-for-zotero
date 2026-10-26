@@ -159,21 +159,40 @@ describe("AgentFinalAnswerController", function () {
       assert.equal(decision.kind, scenario.expected);
     });
   }
-  it("returns a clean assistant copy for a web-attribution correction", async function () {
+  it("accepts an unmarked web answer with an end source chip", async function () {
     const controller = new AgentFinalAnswerController(makeRequest());
 
     const decision = await controller.evaluate({
       candidateText: "An unsupported current claim.",
       canCorrect: true,
       toolExecutionRecords: [
-        { name: "web_search", ok: true, content: { results: [] } },
+        {
+          name: "web_search",
+          ok: true,
+          content: {
+            results: [
+              {
+                sourceId: "web_1",
+                url: "https://example.com/current",
+                hostname: "example.com",
+                organization: "Example",
+                title: "Current facts",
+              },
+            ],
+          },
+        },
       ],
     });
 
-    assert.equal(decision.kind, "correct");
-    if (decision.kind !== "correct") return;
-    assert.equal(decision.assistantContent, "An unsupported current claim.");
-    assert.include(decision.correction, "Correct the web attribution");
+    assert.equal(decision.kind, "accept");
+    if (decision.kind !== "accept") return;
+    assert.equal(decision.webAttribution.status, "valid");
+    assert.equal(
+      decision.webAttribution.cleanText,
+      "An unsupported current claim.",
+    );
+    assert.lengthOf(decision.webAttribution.anchors, 1);
+    assert.equal(decision.webAttribution.anchors[0].placement, "end");
   });
 });
 

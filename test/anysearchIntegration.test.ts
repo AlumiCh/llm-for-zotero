@@ -2,7 +2,7 @@ import { assert } from "chai";
 import { readFileSync } from "node:fs";
 import { AnysearchClient } from "../src/webAccess/anysearchClient";
 import { WebAccessError } from "../src/webAccess/errors";
-import { buildWebSourceId, TavilyClient } from "../src/webAccess/tavilyClient";
+import { TavilyClient } from "../src/webAccess/tavilyClient";
 import {
   ANYSEARCH_API_KEY_PREF,
   TAVILY_API_KEY_PREF,
@@ -238,8 +238,8 @@ describe("AnySearch native integration (offline)", function () {
           snippet: "Public snippet summary",
         },
       ];
-      const expectedSources = pages.map((page) => ({
-        sourceId: buildWebSourceId(`${context.runId}:${page.url}`),
+      const expectedSources = pages.map((page, index) => ({
+        sourceId: `web_${index + 1}`,
         url: page.url,
         hostname: "example.org",
         organization: "example.org",

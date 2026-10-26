@@ -13,6 +13,8 @@ const ICON_SELECTORS = [
   ".llm-standalone-side-panel-icon-rerun::before",
   ".llm-standalone-side-panel-icon-show-in-chat::before",
   ".llm-standalone-side-panel-icon-back::before",
+  ".llm-standalone-side-panel-icon-web-sources::before",
+  ".llm-standalone-side-panel-icon-web-browser::before",
   ...["mermaid", "svg", "html", "code", "plan"].map(
     (kind) => `.llm-standalone-side-panel-icon-item-${kind}::before`,
   ),

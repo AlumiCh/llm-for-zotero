@@ -1,4 +1,5 @@
 import { fnv1a32Raw } from "../../../utils/fnv1a";
+import { openWebSourceLink } from "../webSourcesSidePanel";
 import { CONTENT_FLAT_SCOPE_CLASS } from "../contentChrome";
 import type {
   AgentActionSummaryResultCard,
@@ -47,6 +48,7 @@ import { SKILL_ACTIVATION_TRACE_LABEL } from "../../../agent/workCategory";
 import type { GeneratedChatImage } from "../../../shared/types";
 import { toFileUrl } from "../../../utils/pathFileUrl";
 import { normalizePublicWebUrl } from "../../../webAccess/tavilyClient";
+import { stripWebSourceMarkersForDisplay } from "../../../webAccess/attribution";
 import { agentReasoningExpandedCache } from "../agentState";
 import { copyTextToClipboard } from "../clipboard";
 import {
@@ -6018,7 +6020,16 @@ function renderAgentTraceDetailsBody(
         row.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          Zotero.launchURL(safeHref!);
+          // The side panel in the standalone window (⌘-click: the browser).
+          if (
+            !openWebSourceLink(
+              doc,
+              { url: safeHref!, title: detail.value },
+              event as MouseEvent,
+            )
+          ) {
+            Zotero.launchURL(safeHref!);
+          }
         });
       }
       row.title = detail.value;
@@ -6774,7 +6785,9 @@ export function disposeAgentTrace(root: HTMLElement): void {
  */
 const committedReasoningText = new WeakMap<HTMLElement, string>();
 
-function updateReasoningText(target: HTMLElement, next: string): void {
+function updateReasoningText(target: HTMLElement, rawNext: string): void {
+  // Model reasoning may quote web source markers; show it without them.
+  const next = stripWebSourceMarkersForDisplay(rawNext);
   const previous =
     committedReasoningText.get(target) ?? target.textContent ?? "";
   if (previous === next) return;
@@ -7151,8 +7164,9 @@ export function renderAgentTrace({
           summaryBlock.className = "llm-agent-reasoning-block";
           const text = doc.createElement("div") as HTMLDivElement;
           text.className = "llm-agent-reasoning-text";
-          text.textContent = reasoningText;
-          committedReasoningText.set(text, reasoningText);
+          const shownText = stripWebSourceMarkersForDisplay(reasoningText);
+          text.textContent = shownText;
+          committedReasoningText.set(text, shownText);
           reasoningTextNode = text;
           summaryBlock.appendChild(text);
           bodyWrap.appendChild(summaryBlock);

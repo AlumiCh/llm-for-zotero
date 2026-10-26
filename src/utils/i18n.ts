@@ -1407,6 +1407,44 @@ const zhCN: Record<string, string> = {
   "Resize Task progress": "调整任务进度的高度",
   "Show task progress": "显示任务进度",
   "Hide task progress": "隐藏任务进度",
+  "Move task progress back to chat": "将任务进度移回对话",
+  "Move back to chat": "移回对话",
+  "No new reads": "没有新的阅读",
+  found: "已找到",
+  Cited: "已引用",
+  "Answered from earlier reading. No papers were opened again.":
+    "根据之前的阅读作答，没有再次打开论文。",
+  "Steps and papers the agent works through": "智能体正在进行的步骤和论文",
+  "Web pages the agent found in this chat": "智能体在此对话中找到的网页",
+  "Opens in the side panel · {key}-click opens your browser":
+    "在侧边面板中打开 · {key}-点击在浏览器中打开",
+  Back: "返回",
+  "Copy link": "复制链接",
+  "Open in default browser": "在默认浏览器中打开",
+  "What the agent read": "智能体读到的内容",
+  "No web pages in this chat yet": "此对话中还没有网页",
+  "Question {n}": "问题 {n}",
+  "1 page": "1 个网页",
+  "{count} pages": "{count} 个网页",
+  "{count} opened": "已打开 {count} 个",
+  "The agent opened this page": "智能体打开过此网页",
+  "The agent only saw this page in search results":
+    "智能体只在搜索结果中看到过此网页",
+  "This page cannot be shown here.": "此网页无法在这里显示。",
+  "The agent did not read this page. It only appears as a link in the answer.":
+    "智能体没有读过此网页，它只是回答中的一个链接。",
+  "The agent read this whole page.": "智能体读完了整个页面。",
+  "The parts of this page the agent read. It did not read the whole page.":
+    "智能体读过的本页部分。它没有读完整个页面。",
+  "The agent only looked at this page's outline (its headings).":
+    "智能体只看了本页的大纲（各级标题）。",
+  "The parts of this page the agent got: the passages that matched its question, not the whole page.":
+    "智能体从此网页获得的部分：与它的问题相关的段落，而不是整个网页。",
+  "The agent only saw this short search result. It did not open the page.":
+    "智能体只看到了这段简短的搜索结果，没有打开此网页。",
+  "Back to the previous page": "返回上一个网页",
+  "Back to Web sources": "返回网页来源",
+  "Link copied": "链接已复制",
   "Reads are recorded in Agent mode. This list shows the papers in scope.":
     "阅读记录仅在 Agent 模式下生成。此列表显示范围内的论文。",
   "Reads are recorded in Agent mode.": "阅读记录仅在 Agent 模式下生成。",

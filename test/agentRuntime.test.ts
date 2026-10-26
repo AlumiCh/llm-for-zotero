@@ -20,7 +20,7 @@ import { createSubmitDocumentTool } from "../src/agent/tools/control/submitDocum
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { AgentRuntime } from "../src/agent/runtime";
+import { AgentRuntime, webSourceNumberSeed } from "../src/agent/runtime";
 import { clearAgentReadLedger } from "../src/agent/context/resourceContextPlan";
 import { clearAgentCoverageLedger } from "../src/agent/context/coverageLedger";
 import {
@@ -55,6 +55,7 @@ import { createContextReadTool } from "../src/agent/tools/read/contextRead";
 import { createFileIOTool } from "../src/agent/tools/write/fileIO";
 import { createWebSearchTool } from "../src/agent/tools/read/webSearch";
 import { createPaperReadTool } from "../src/agent/tools/read/paperRead";
+import { getWebSourceAnchorsFromTrace } from "../src/webAccess/attribution";
 import { TAVILY_API_KEY_PREF } from "../src/webAccess/prefs";
 import type { WebAccessProvider } from "../src/webAccess/types";
 import {
@@ -8227,7 +8228,133 @@ describe("web attribution runtime guard", function () {
     }
   });
 
-  it("allows one correction, persists clean Markdown, and stores terminal anchors", async function () {
+  it("seeds web source numbering from stored web tool results", async function () {
+    const restoreDb = installMockDb();
+    try {
+      const conversationKey = 924;
+      const stored = [
+        {
+          toolName: "web_search",
+          content: { results: [{ sourceId: "web_12" }] },
+        },
+        { toolName: "web_read", content: '{"pages":[{"sourceId":"web_5"}]}' },
+        // Only web tools' results are scanned.
+        { toolName: "paper_read", content: { text: "web_99" } },
+      ].flatMap(({ toolName, content }, index) => {
+        const record = createAgentToolResultHandleRecord({
+          conversationKey,
+          toolName,
+          toolCallId: `call-${index}`,
+          content,
+        });
+        return record ? [record] : [];
+      });
+      await upsertAgentToolResultHandles(stored);
+
+      assert.equal(
+        await webSourceNumberSeed(conversationKey, [{ content: "see web_3" }]),
+        12,
+      );
+      assert.equal(
+        await webSourceNumberSeed(925, [{ content: "see web_3" }]),
+        3,
+      );
+    } finally {
+      restoreDb();
+    }
+  });
+
+  it("a second turn numbers web sources after the first turn's", async function () {
+    const restoreDb = installMockDb();
+    try {
+      Zotero.Prefs.set(TAVILY_API_KEY_PREF, "tvly-test", true);
+      let searchCalls = 0;
+      const numberingProvider: WebAccessProvider = {
+        ...provider,
+        search: async (request) => {
+          searchCalls += 1;
+          const response = await provider.search(request);
+          return {
+            ...response,
+            results: response.results.map((result) => ({
+              ...result,
+              url: `https://example.com/current-${searchCalls}`,
+            })),
+          };
+        },
+      };
+      const registry = new AgentToolRegistry();
+      registry.register(createWebSearchTool(() => numberingProvider));
+      const turnSourceIds: string[] = [];
+      const runtime = new AgentRuntime({
+        registry,
+        adapterFactory: () => {
+          let step = 0;
+          return {
+            getCapabilities: () => capabilities,
+            supportsTools: () => true,
+            async runStep(params: AgentStepParams): Promise<AgentModelStep> {
+              step += 1;
+              if (step === 1) return searchStep;
+              const toolMessages = params.messages.filter(
+                (message) =>
+                  message.role === "tool" && message.name === "web_search",
+              );
+              const content = JSON.parse(
+                String(toolMessages.at(-1)?.content),
+              ) as { results?: Array<{ sourceId?: string }> };
+              const sourceId = content.results?.[0]?.sourceId || "";
+              turnSourceIds.push(sourceId);
+              // Turn 2 cites turn 1's ID: a source an earlier question found.
+              const text =
+                turnSourceIds.length === 1
+                  ? `A supported current claim.<!--llm-web-source:${sourceId}-->`
+                  : "Claim.<!--llm-web-source:web_1-->";
+              return {
+                kind: "final",
+                text,
+                assistantMessage: { role: "assistant", content: text },
+              };
+            },
+          };
+        },
+      });
+      const finals: Array<Extract<AgentEvent, { type: "final" }>> = [];
+      for (let turn = 0; turn < 2; turn += 1) {
+        const outcome = await runtime.runTurn({
+          request: {
+            conversationKey: 923,
+            mode: "agent",
+            userText: "What is current?",
+            model: "gpt-4o-mini",
+            apiBase: "https://api.openai.com/v1/chat/completions",
+            apiKey: "test",
+            authMode: "api_key",
+          },
+          onEvent: (event) => {
+            if (event.type === "final") finals.push(event);
+          },
+        });
+        assert.equal(outcome.kind, "completed");
+      }
+
+      assert.deepEqual(turnSourceIds, ["web_1", "web_2"]);
+      const anchors = finals.at(-1)?.webSourceAnchors || [];
+      assert.deepEqual(
+        anchors
+          .filter((anchor) => anchor.placement !== "end")
+          .flatMap((anchor) => anchor.sources.map((item) => item.sourceId)),
+        ["web_1"],
+        "the paragraph's marker names the earlier question's source",
+      );
+      // Every paragraph is marked, so no end chip lists the unused search.
+      assert.isFalse(anchors.some((anchor) => anchor.placement === "end"));
+    } finally {
+      restoreDb();
+    }
+  });
+
+  it("accepts an unmarked answer, persists clean Markdown, and stores an end anchor", async function () {
     const restoreDb = installMockDb();
     try {
       Zotero.Prefs.set(TAVILY_API_KEY_PREF, "tvly-test", true);
@@ -8244,22 +8371,13 @@ describe("web attribution runtime guard", function () {
             modelInputs.push(params.messages.slice());
             step += 1;
             if (step === 1) return searchStep;
-            if (step === 2) {
-              return {
-                kind: "final",
-                text: "An unsupported current claim.",
-                assistantMessage: {
-                  role: "assistant",
-                  content: "An unsupported current claim.",
-                },
-              };
-            }
-            const sourceId = findSourceId(params.messages);
-            const text = `A supported current claim.<!--llm-web-source:${sourceId}-->`;
             return {
               kind: "final",
-              text,
-              assistantMessage: { role: "assistant", content: text },
+              text: "An unsupported current claim.",
+              assistantMessage: {
+                role: "assistant",
+                content: "An unsupported current claim.",
+              },
             };
           },
         }),
@@ -8280,21 +8398,19 @@ describe("web attribution runtime guard", function () {
 
       assert.equal(outcome.kind, "completed");
       if (outcome.kind !== "completed") return;
-      assert.equal(outcome.text, "A supported current claim.");
-      assert.lengthOf(modelInputs, 3);
-      const correction = modelInputs[2].find(
-        (message) =>
-          message.role === "user" &&
-          typeof message.content === "string" &&
-          message.content.includes("Correct the web attribution"),
+      assert.equal(outcome.text, "An unsupported current claim.");
+      assert.lengthOf(modelInputs, 2);
+      assert.notInclude(
+        JSON.stringify(modelInputs),
+        "Correct the web attribution",
       );
-      assert.exists(correction);
       const finalEvent = events.findLast(
         (event): event is Extract<AgentEvent, { type: "final" }> =>
           event.type === "final",
       );
-      assert.equal(finalEvent?.text, "A supported current claim.");
+      assert.equal(finalEvent?.text, "An unsupported current claim.");
       assert.lengthOf(finalEvent?.webSourceAnchors || [], 1);
+      assert.equal(finalEvent?.webSourceAnchors?.[0].placement, "end");
       assert.equal(
         finalEvent?.webSourceAnchors?.[0].offset,
         outcome.text.length,
@@ -8302,23 +8418,24 @@ describe("web attribution runtime guard", function () {
       assert.notInclude(outcome.text, "llm-web-source");
       const transcript = readPersistedTranscript(restoreDb, 921);
       assert.equal(transcript.at(-1)?.role, "assistant");
-      assert.equal(transcript.at(-1)?.content, "A supported current claim.");
+      assert.equal(transcript.at(-1)?.content, "An unsupported current claim.");
       assert.notInclude(JSON.stringify(transcript), "llm-web-source");
     } finally {
       restoreDb();
     }
   });
 
-  it("fails closed after a second invalid attribution response", async function () {
+  it("completes an unmarked web answer with an end chip instead of replacing it", async function () {
     const restoreDb = installMockDb();
     try {
       Zotero.Prefs.set(TAVILY_API_KEY_PREF, "tvly-test", true);
       const registry = new AgentToolRegistry();
       registry.register(createWebSearchTool(() => provider));
+      let modelSteps = 0;
       const runtime = new AgentRuntime({
         registry,
-        adapterFactory: () =>
-          new MockAdapter(
+        adapterFactory: () => {
+          const adapter = new MockAdapter(
             [
               searchStep,
               {
@@ -8339,7 +8456,18 @@ describe("web attribution runtime guard", function () {
               },
             ],
             capabilities,
-          ),
+          );
+          return {
+            getCapabilities: (request: AgentRuntimeRequest) =>
+              adapter.getCapabilities(request),
+            supportsTools: (request: AgentRuntimeRequest) =>
+              adapter.supportsTools(request),
+            runStep: (params: AgentStepParams) => {
+              modelSteps += 1;
+              return adapter.runStep(params);
+            },
+          };
+        },
       });
       const outcome = await runtime.runTurn({
         request: {
@@ -8355,11 +8483,15 @@ describe("web attribution runtime guard", function () {
 
       assert.equal(outcome.kind, "completed");
       if (outcome.kind !== "completed") return;
-      assert.include(outcome.text, "could not safely attach valid");
+      assert.include(outcome.text, "First uncited claim");
+      assert.equal(modelSteps, 2);
       const run = restoreDb.runs.get(outcome.runId);
-      assert.equal(run?.status, "failed");
-      assert.notInclude(outcome.text, "First uncited claim");
-      assert.notInclude(outcome.text, "Second uncited claim");
+      assert.equal(run?.status, "completed");
+      const anchors = getWebSourceAnchorsFromTrace(
+        (await getAgentRunTrace(outcome.runId)).events,
+      );
+      assert.lengthOf(anchors, 1);
+      assert.equal(anchors[0].placement, "end");
     } finally {
       restoreDb();
     }

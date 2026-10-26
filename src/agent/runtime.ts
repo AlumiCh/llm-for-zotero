@@ -18,8 +18,20 @@ import {
   classifyConversationKey,
   isEphemeralConversationKey,
 } from "../shared/conversationKeySpace";
-import type { WebAttributionAssessment } from "../webAccess/attribution";
-import { clearWebSourcesForRun } from "../webAccess/runSources";
+import type {
+  SourceCatalog,
+  WebAttributionAssessment,
+} from "../webAccess/attribution";
+import {
+  EARLIER_SOURCE_TOOL_NAMES,
+  buildEarlierSourcesBlock,
+  earlierSourceCatalog,
+} from "../webAccess/earlierSources";
+import {
+  clearWebSourcesForRun,
+  highestWebSourceNumber,
+  seedWebSourceNumbering,
+} from "../webAccess/runSources";
 import {
   clearOutsideSearchTurn,
   resetOutsideSearchLedger,
@@ -309,6 +321,53 @@ function shiftWebAttribution(
       offset: Math.max(0, anchor.offset + delta),
     })),
   };
+}
+
+/**
+ * The highest web_<n> the model can still copy in this conversation: in the
+ * loaded transcript, and in the stored web_search and web_read results, which
+ * the transcript keeps only as handles. If the store cannot be read, the
+ * transcript alone sets the seed.
+ */
+export async function webSourceNumberSeed(
+  conversationKey: number,
+  messages: readonly { content?: unknown }[],
+): Promise<number> {
+  let stored: AgentToolResultHandleRecord[] = [];
+  try {
+    stored = (
+      await Promise.all(
+        ["web_search", "web_read"].map((toolName) =>
+          listAgentToolResultHandles({ conversationKey, toolName }),
+        ),
+      )
+    ).flat();
+  } catch {
+    stored = [];
+  }
+  return highestWebSourceNumber([...messages, ...stored]);
+}
+
+/**
+ * The outside sources earlier questions of this conversation found: papers
+ * and web pages from their stored tool results. If the store cannot be read,
+ * a follow-up starts with none.
+ */
+export async function loadEarlierSources(
+  conversationKey: number,
+): Promise<SourceCatalog> {
+  try {
+    const stored = (
+      await Promise.all(
+        EARLIER_SOURCE_TOOL_NAMES.map((toolName) =>
+          listAgentToolResultHandles({ conversationKey, toolName }),
+        ),
+      )
+    ).flat();
+    return earlierSourceCatalog(stored);
+  } catch {
+    return { sources: new Map(), linkIds: new Map() };
+  }
 }
 
 function createRunId(): string {
@@ -1311,6 +1370,14 @@ export class AgentRuntime {
             compatibilityKey: transcriptCompatibilityKey,
           };
       }
+      seedWebSourceNumbering(
+        runId,
+        await webSourceNumberSeed(
+          request.conversationKey,
+          transcriptSegment.messages,
+        ),
+      );
+      const earlierSources = await loadEarlierSources(request.conversationKey);
       const history = normalizeHistoryMessages(request);
       const legacyCheckpoint = transcriptSegment.messages.some(
         (message) =>
@@ -1695,6 +1762,7 @@ export class AgentRuntime {
         resourceContextPlan,
         {
           contentInputs: resolveCapabilitiesContentInputs(adapterCapabilities),
+          earlierSourcesBlock: buildEarlierSourcesBlock(earlierSources),
         },
       );
       request.deliveredToolGuidance = [
@@ -2000,7 +2068,9 @@ export class AgentRuntime {
       const extendedRunLimits = request.metadata?.hostRecordedBatchJob === true;
       const { maxRounds, maxToolCallsPerRound } =
         resolveAgentLimits(extendedRunLimits);
-      const finalAnswerController = new AgentFinalAnswerController(request);
+      const finalAnswerController = new AgentFinalAnswerController(request, {
+        earlierSources,
+      });
       // Every whole-turn stop decision (loop/turnBoundary.ts): the failure
       // counters, navigation without evidence, the safety limits and the
       // retry policy. Rejected input never ran, so it is a repair
@@ -3515,9 +3585,6 @@ export class AgentRuntime {
                     role: "assistant" as const,
                     content: step.text || stepStreamedText,
                   }),
-                  ...(typeof finalDecision.assistantContent === "string"
-                    ? { content: finalDecision.assistantContent }
-                    : {}),
                 };
                 const userCorrectionMessage: AgentUserMessage = {
                   role: "user",

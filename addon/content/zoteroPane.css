@@ -19414,3 +19414,531 @@ item-pane-sidenav .llm-persistent-rail-entry[hidden] {
   color: var(--llm-history-library-chip-text);
   background: var(--llm-history-library-chip-bg);
 }
+
+/* Web markers: the first sites' icons, overlapping, then "+N" for the rest
+ * (webSourceIndicators.ts). Each site sits on its own small white disc, so
+ * any favicon reads on a dark or light chat; a site with no icon shows the
+ * globe there. */
+.llm-web-source-chip.llm-web-source-chip-sites {
+  /* About as tall as the answer's text, and grows with the chat's font
+   * size. Whole pixels (no em): a fractional size draws the round discs
+   * out of shape at the sidebar's small text. */
+  --llm-web-marker-disc: calc(11px * var(--llm-font-scale, 1));
+  /* A light tint of the text colour: the white discs stand out on it in
+   * light and dark chats alike. */
+  --llm-web-marker-bg: color-mix(
+    in srgb,
+    var(--fill-primary, #888) 9%,
+    var(--material-background)
+  );
+  background: var(--llm-web-marker-bg);
+  border-color: transparent;
+  width: auto;
+  /* With the 1px border, a single disc sits in a true circle. */
+  min-width: calc(var(--llm-web-marker-disc) + 4px);
+  height: calc(var(--llm-web-marker-disc) + 4px);
+  padding: 0 1px;
+  gap: 4px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.llm-web-source-chip.llm-web-source-chip-sites:has(.llm-web-source-more) {
+  padding-inline-end: 7px;
+}
+
+.llm-web-source-chip.llm-web-source-chip-sites:hover,
+.llm-web-source-chip.llm-web-source-chip-sites:focus-visible,
+.llm-web-source-indicator.expanded
+  .llm-web-source-chip.llm-web-source-chip-sites {
+  /* A plain, slightly darker tint: no accent colour. */
+  --llm-web-marker-bg: color-mix(
+    in srgb,
+    var(--fill-primary, #888) 17%,
+    var(--material-background)
+  );
+  border-color: transparent;
+  color: var(--fill-secondary);
+}
+
+/* Centred on the middle of the line's capital letters and brackets.
+ * `middle` alone centres on the lowercase letters, which reads as sitting
+ * low, so lift it by the gap between the two (about 1px). A class, not
+ * :has(), so Zotero 7 gets it too. */
+.llm-web-source-indicator.llm-web-source-indicator-sites {
+  vertical-align: middle;
+  top: calc(-1px * var(--llm-font-scale, 1));
+}
+
+.llm-web-source-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.llm-web-source-marker-icons {
+  display: inline-flex;
+  align-items: center;
+}
+
+.llm-web-source-marker-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: var(--llm-web-marker-disc, 15px);
+  height: var(--llm-web-marker-disc, 15px);
+  border-radius: 50%;
+  background: #fff;
+  /* A ring of the chip's colour parts overlapping discs. */
+  box-shadow: 0 0 0 1.5px var(--llm-web-marker-bg, var(--material-background));
+  color: #6b6b6b;
+  overflow: hidden;
+}
+
+/* The next disc tucks under the one before by its rim only, so every
+ * site's icon stays whole. */
+.llm-web-source-marker-icon + .llm-web-source-marker-icon {
+  margin-inline-start: calc(var(--llm-web-marker-disc, 15px) * -0.25);
+}
+
+.llm-web-source-marker-icon::before {
+  content: "";
+  position: absolute;
+  inset: 20%;
+  background: currentColor;
+  mask: url("icons/action-mode-global.svg") center / contain no-repeat;
+  -webkit-mask: url("icons/action-mode-global.svg") center / contain no-repeat;
+}
+
+.llm-web-source-marker-icon.llm-web-source-marker-icon-has-favicon::before {
+  display: none;
+}
+
+.llm-web-source-marker-favicon {
+  display: block;
+  /* A whole-pixel size, so the icon stays centred and round in its disc. */
+  width: calc(var(--llm-web-marker-disc, 15px) - 4px);
+  height: calc(var(--llm-web-marker-disc, 15px) - 4px);
+  object-fit: contain;
+}
+
+/* An answer's own pictures get a 4px top and bottom margin
+ * (.llm-rendered-markdown img). On a marker's icon that pushed it 2px
+ * down its disc, so it sat low and its bottom was cut off. */
+.llm-web-source-marker-icon .llm-web-source-marker-favicon {
+  margin: 0;
+  border-radius: 0;
+}
+
+.llm-web-source-marker-favicon[hidden] {
+  display: none;
+}
+
+.llm-web-source-more {
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-11);
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.llm-web-source-chip:hover .llm-web-source-more,
+.llm-web-source-chip:focus-visible .llm-web-source-more,
+.llm-web-source-indicator.expanded .llm-web-source-more {
+  color: var(--fill-primary);
+}
+
+/* The source card's last line (standalone window only). */
+.llm-web-source-hint {
+  display: block;
+  margin-top: 2px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--stroke-secondary, rgba(120, 120, 120, 0.35));
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-10);
+  line-height: 1.35;
+}
+
+/* Web sources tab (side panel): globe icon, as the New tab row's icon, the
+ * tab's icon, and the "Open in default browser" button. */
+.llm-standalone-side-panel-icon-web-sources::before,
+.llm-standalone-side-panel-icon-web-browser::before {
+  mask-image: url("icons/action-mode-global.svg");
+  -webkit-mask-image: url("icons/action-mode-global.svg");
+}
+
+.llm-standalone-side-panel-web {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.llm-standalone-side-panel-web[hidden] {
+  display: none;
+}
+
+.llm-web-sources-title-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.llm-web-sources-title-icon[hidden] {
+  display: none;
+}
+
+/* The list reuses the History rows (.llm-standalone-search-*), flat on the
+ * panel as in Miscellaneous. */
+.llm-web-sources-list.llm-standalone-search-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: transparent;
+  padding: 0 8px 12px;
+}
+
+.llm-web-sources-row.llm-standalone-search-item {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.llm-web-sources-row-highlighted.llm-standalone-search-item {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.llm-web-sources-number {
+  flex: 0 0 14px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-10);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  line-height: 18px;
+}
+
+.llm-web-sources-site-icon {
+  position: relative;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border-radius: 3px;
+  color: var(--fill-tertiary);
+}
+
+.llm-web-sources-site-icon::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  background: currentColor;
+  mask: url("icons/action-mode-global.svg") center / contain no-repeat;
+  -webkit-mask: url("icons/action-mode-global.svg") center / contain no-repeat;
+}
+
+.llm-web-sources-site-icon.llm-web-sources-site-icon-has-favicon::before {
+  display: none;
+}
+
+.llm-web-sources-favicon {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.llm-web-sources-favicon[hidden] {
+  display: none;
+}
+
+.llm-web-sources-row-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.llm-web-sources-row-main .llm-standalone-search-title {
+  flex: 0 1 auto;
+}
+
+/* "Cited": the Task progress paper tag. */
+.llm-web-sources-cited {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-accent);
+  font-size: var(--llm-fs-10);
+  font-weight: 600;
+  line-height: 16px;
+}
+
+/* Opened or not: the Task progress paper sign (empty ring, or the green
+ * check), with "found" for a page seen only in search results. */
+.llm-web-sources-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-10);
+  line-height: 18px;
+}
+
+.llm-web-sources-sign {
+  position: relative;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--llm-popup-surface-border);
+  border-radius: 50%;
+}
+
+.llm-web-sources-state[data-read="true"] .llm-web-sources-sign {
+  border: 0;
+  background: var(--llm-diff-add-fg);
+}
+
+.llm-web-sources-state[data-read="true"] .llm-web-sources-sign::after {
+  position: absolute;
+  top: 2.5px;
+  left: 4.8px;
+  width: 3px;
+  height: 6px;
+  border: solid var(--material-sidepane, var(--material-background));
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(45deg);
+  content: "";
+}
+
+/* Copy link | Open in default browser: in place of the sign while the
+ * pointer is on the row. */
+.llm-web-sources-row-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin: -2px -2px -2px 0;
+}
+
+.llm-web-sources-row:hover .llm-web-sources-row-actions,
+.llm-web-sources-row:focus-within .llm-web-sources-row-actions {
+  display: inline-flex;
+}
+
+.llm-web-sources-row:hover .llm-web-sources-state,
+.llm-web-sources-row:focus-within .llm-web-sources-state {
+  display: none;
+}
+
+.llm-web-sources-row-actions .llm-standalone-title-action {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+}
+
+/* "Page | What the agent read": flat text tabs, an underline on the chosen
+ * one, lined up with the title text. */
+.llm-web-sources-modes {
+  display: flex;
+  gap: 16px;
+  flex: 0 0 auto;
+  /* webSourcesTab.ts lines the tabs up with the title text. */
+  padding: 0 12px 0 16px;
+}
+
+.llm-web-sources-modes[hidden] {
+  display: none;
+}
+
+.llm-web-sources-mode {
+  appearance: none;
+  margin: 0;
+  padding: 2px 0 6px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--fill-tertiary);
+  font: inherit;
+  font-size: var(--llm-fs-12);
+  cursor: pointer;
+}
+
+.llm-web-sources-mode:hover {
+  color: var(--fill-primary);
+}
+
+.llm-web-sources-mode.active {
+  color: var(--fill-primary);
+  font-weight: 600;
+  border-bottom-color: var(--fill-primary);
+}
+
+.llm-web-sources-page {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 2px 12px 12px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.llm-web-sources-page[hidden],
+.llm-web-sources-text[hidden],
+.llm-web-sources-list[hidden] {
+  display: none;
+}
+
+.llm-web-sources-browser {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.llm-web-sources-page-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: auto;
+  padding: 24px;
+  color: #444;
+  font-size: var(--llm-fs-12);
+  text-align: center;
+}
+
+.llm-web-sources-page-open {
+  padding: 4px 12px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #f5f5f5;
+  color: #222;
+  font: inherit;
+  cursor: pointer;
+}
+
+.llm-web-sources-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 18px 20px;
+  color: var(--fill-primary);
+  font-size: var(--llm-fs-13);
+  line-height: 1.6;
+}
+
+.llm-web-sources-text-note {
+  margin-bottom: 10px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11);
+}
+
+.llm-web-sources-text-body p {
+  margin: 0 0 10px;
+}
+
+/* Web sources: a hidden control takes no room (the title row's buttons set
+ * their own display, which would otherwise win over [hidden]). */
+.llm-standalone-side-panel-web [hidden] {
+  display: none !important;
+}
+
+/* One block per question, newest first, as in the docked Task progress:
+ * icon | question (two lines at most) | chevron, and a line under the words
+ * naming the question and its counts. No boxes: only a hover tint. */
+.llm-web-sources-question + .llm-web-sources-question {
+  margin-top: 2px;
+}
+
+.llm-web-sources-question-head {
+  appearance: none;
+  -moz-appearance: none;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 16px;
+  column-gap: 10px;
+  align-items: start;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fill-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.llm-web-sources-question-head:hover {
+  background: color-mix(in srgb, var(--fill-primary) 5%, transparent);
+}
+
+.llm-web-sources-question-head:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.llm-web-sources-question-icon {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0 2px;
+  background: var(--fill-tertiary);
+  mask: url("icons/action-mode-global.svg") center / contain no-repeat;
+  -webkit-mask: url("icons/action-mode-global.svg") center / contain no-repeat;
+}
+
+.llm-web-sources-question-words {
+  display: -webkit-box;
+  overflow: hidden;
+  font-weight: 600;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.llm-web-sources-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  color: var(--fill-tertiary);
+}
+
+.llm-web-sources-chevron svg {
+  transition: transform 0.15s;
+}
+
+.llm-web-sources-question-head[aria-expanded="true"]
+  .llm-web-sources-chevron
+  svg {
+  transform: rotate(180deg);
+}
+
+.llm-web-sources-question-meta {
+  grid-column: 2 / 4;
+  margin-top: 2px;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-11);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+.llm-web-sources-question-meta > span:empty {
+  display: none;
+}
+
+.llm-web-sources-question-meta > span:not(:empty) ~ span:not(:empty)::before {
+  content: " · ";
+}
+
+.llm-web-sources-question-body {
+  padding: 0 0 6px 30px;
+}
