@@ -125,6 +125,24 @@ describe("standalone sidebar view", function () {
       view.pinnedRegion,
       view.historyRegion,
       view.preferencesRegion,
+      view.historySortMenu,
+    ]);
+    // "Conversations" heads the history list, with the sort button at its
+    // end; its menu starts closed.
+    assert.deepEqual(view.historyRegion.children, [
+      view.historyHeader,
+      view.undo,
+      view.list,
+    ]);
+    assert.equal(
+      view.historyHeader.children[0].children[1],
+      view.historySortButton,
+    );
+    assert.isTrue(view.historySortMenu.hidden);
+    assert.deepEqual(Array.from(view.historySortItems.keys()), [
+      "recent",
+      "created",
+      "title",
     ]);
     // "Pinned papers" always shows, just its label until a paper is
     // pinned, and "Clear" on that label row once one is.
